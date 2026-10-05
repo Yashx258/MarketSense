@@ -1,13 +1,12 @@
-# MarketSense - data foundation (this semester)
+# MarketSense - data foundation 
 
 Scope: PostgreSQL schema, KSE-100 price collection via `psxdata`, RSI/MACD features.
-Not included: FAISS, pattern matching, portfolio, crypto, order flow, knowledge graphs, trading, FastAPI, React.
 
 ## Setup
 1. python -m venv .venv && source .venv/bin/activate
 2. pip install -r requirements.txt
 3. createdb marketsense   (and a DB user)
-4. cp .env.example .env   -> set DB_USER / DB_PASSWORD / DB_NAME (never commit .env)
+4. cp .env.example .env   -> set DB_USER / DB_PASSWORD / DB_NAME 
 5. python -m scripts.init_db                      # applies sql/schema.sql (safe to re-run)
 6. python -m scripts.collect_prices --symbols ENGRO   # try one stock first
 7. python -m scripts.collect_prices               # full KSE-100 universe
