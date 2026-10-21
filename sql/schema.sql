@@ -59,6 +59,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_news_url ON news_articles (url) WHERE url I
 CREATE INDEX IF NOT EXISTS ix_news_stock_pub ON news_articles (stock_id, published_at DESC);
 CREATE INDEX IF NOT EXISTS ix_news_published ON news_articles (published_at DESC);
 
+-- Which stocks an article mentions (an article can mention several; news_articles.stock_id is only set when exactly one).
+CREATE TABLE IF NOT EXISTS news_article_stocks (
+    news_id     BIGINT      NOT NULL REFERENCES news_articles(news_id) ON DELETE CASCADE,
+    stock_id    BIGINT      NOT NULL REFERENCES stocks(stock_id) ON DELETE CASCADE,
+    matched_by  VARCHAR(20) NOT NULL DEFAULT 'symbol' CHECK (matched_by IN ('symbol', 'name', 'source')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (news_id, stock_id)
+);
+CREATE INDEX IF NOT EXISTS ix_nas_stock ON news_article_stocks (stock_id);
+
 CREATE TABLE IF NOT EXISTS fundamentals (
     fundamental_id BIGSERIAL PRIMARY KEY,
     stock_id       BIGINT      NOT NULL REFERENCES stocks(stock_id) ON DELETE CASCADE,
@@ -90,7 +100,7 @@ CREATE INDEX IF NOT EXISTS ix_tech_date ON technical_features (trading_date);
 CREATE TABLE IF NOT EXISTS sentiment_features (
     sentiment_id   BIGSERIAL PRIMARY KEY,
     news_id        BIGINT      NOT NULL REFERENCES news_articles(news_id) ON DELETE CASCADE,
-    stock_id       BIGINT      NOT NULL REFERENCES stocks(stock_id) ON DELETE CASCADE,
+    stock_id       BIGINT      REFERENCES stocks(stock_id) ON DELETE CASCADE,   -- NULL = market-wide / multi-stock article
     positive_score NUMERIC(6,5) NOT NULL CHECK (positive_score BETWEEN 0 AND 1),
     neutral_score  NUMERIC(6,5) NOT NULL CHECK (neutral_score  BETWEEN 0 AND 1),
     negative_score NUMERIC(6,5) NOT NULL CHECK (negative_score BETWEEN 0 AND 1),
@@ -100,3 +110,7 @@ CREATE TABLE IF NOT EXISTS sentiment_features (
     CONSTRAINT uq_sent_news_model UNIQUE (news_id, model_name)
 );
 CREATE INDEX IF NOT EXISTS ix_sent_stock_time ON sentiment_features (stock_id, processed_at DESC);
+
+-- Migration for databases created before news support (idempotent; also applied by `python -m scripts.init_db`):
+-- market-wide and multi-stock articles have no single stock, so sentiment rows must allow NULL stock_id.
+ALTER TABLE sentiment_features ALTER COLUMN stock_id DROP NOT NULL;

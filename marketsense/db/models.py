@@ -59,6 +59,16 @@ class NewsArticle(Base):
                             postgresql_where=text("url IS NOT NULL"), sqlite_where=text("url IS NOT NULL")),)
 
 
+class NewsArticleStock(Base):
+    """Link table: which stocks an article mentions (many-to-many)."""
+    __tablename__ = "news_article_stocks"
+    news_id: Mapped[int] = mapped_column(ForeignKey("news_articles.news_id", ondelete="CASCADE"), primary_key=True)
+    stock_id: Mapped[int] = mapped_column(ForeignKey("stocks.stock_id", ondelete="CASCADE"), primary_key=True)
+    matched_by: Mapped[str] = mapped_column(String(20), nullable=False, default="symbol", server_default="symbol")
+    created_at: Mapped[datetime] = mapped_column(TS, server_default=func.now(), nullable=False)
+    __table_args__ = (Index("ix_nas_stock", "stock_id"),)
+
+
 class Fundamental(Base):
     __tablename__ = "fundamentals"
     fundamental_id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
@@ -89,7 +99,7 @@ class SentimentFeature(Base):
     __tablename__ = "sentiment_features"
     sentiment_id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
     news_id: Mapped[int] = mapped_column(ForeignKey("news_articles.news_id", ondelete="CASCADE"), nullable=False)
-    stock_id: Mapped[int] = mapped_column(ForeignKey("stocks.stock_id", ondelete="CASCADE"), nullable=False)
+    stock_id: Mapped[int | None] = mapped_column(ForeignKey("stocks.stock_id", ondelete="CASCADE"))  # NULL = market-wide / multi-stock
     positive_score: Mapped[Decimal] = mapped_column(Numeric(6, 5), nullable=False)
     neutral_score: Mapped[Decimal] = mapped_column(Numeric(6, 5), nullable=False)
     negative_score: Mapped[Decimal] = mapped_column(Numeric(6, 5), nullable=False)

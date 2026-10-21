@@ -34,7 +34,7 @@ def session_scope(engine: Engine | None = None) -> Iterator[Session]:
         session.close()
 
 
-def _dialect_insert(session: Session):
+def dialect_insert(session: Session):
     name = session.get_bind().dialect.name
     if name == "postgresql":
         from sqlalchemy.dialects.postgresql import insert
@@ -46,12 +46,17 @@ def _dialect_insert(session: Session):
 
 
 def insert_ignore_duplicates(session: Session, model, rows: Sequence[dict], conflict_cols: Iterable[str],
-                             chunk: int = 1000) -> int:
-    """INSERT ... ON CONFLICT DO NOTHING. Returns number of rows actually inserted."""
+                             chunk: int = 1000, index_where=None) -> int:
+    """INSERT ... ON CONFLICT DO NOTHING. Returns number of rows actually inserted.
+
+    `index_where` is REQUIRED when the conflict target is a PARTIAL unique index (e.g. news_articles.url,
+    unique only WHERE url IS NOT NULL): PostgreSQL otherwise raises 'no unique or exclusion constraint
+    matching the ON CONFLICT specification'.
+    """
     inserted = 0
     for i in range(0, len(rows), chunk):
-        stmt = (_dialect_insert(session)(model).values(list(rows[i:i + chunk]))
-                .on_conflict_do_nothing(index_elements=list(conflict_cols)))
+        stmt = (dialect_insert(session)(model).values(list(rows[i:i + chunk]))
+                .on_conflict_do_nothing(index_elements=list(conflict_cols), index_where=index_where))
         inserted += max(session.execute(stmt).rowcount or 0, 0)
     return inserted
 
@@ -61,7 +66,7 @@ def upsert(session: Session, model, rows: Sequence[dict], conflict_cols: Iterabl
     """INSERT ... ON CONFLICT DO UPDATE (for *derived* tables that are safe to recompute)."""
     total = 0
     for i in range(0, len(rows), chunk):
-        ins = _dialect_insert(session)(model).values(list(rows[i:i + chunk]))
+        ins = dialect_insert(session)(model).values(list(rows[i:i + chunk]))
         stmt = ins.on_conflict_do_update(index_elements=list(conflict_cols),
                                          set_={c: getattr(ins.excluded, c) for c in update_cols})
         total += max(session.execute(stmt).rowcount or 0, 0)

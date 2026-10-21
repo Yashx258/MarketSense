@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:media="http://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0">
+  <channel>
+    <title>Dawn - Business</title>
+    <link>https://www.dawn.com/</link>
+    <description>Dawn</description>
+    <language>en-Us</language>
+    <copyright>Copyright 2026</copyright>
+    <pubDate>Mon, 12 Oct 2026 02:12:13 +0500</pubDate>
+    <lastBuildDate>Mon, 12 Oct 2026 02:12:13 +0500</lastBuildDate>
+    <ttl>60</ttl>
+    <!-- A: single stock by company name; title has a trailing newline like the real feed; guid != link -->
+    <item>
+      <title>Lucky Cement lifts quarterly profit
+</title>
+      <link>https://www.dawn.com/news/9000001/lucky-cement-lifts-quarterly-profit</link>
+      <description>&lt;p&gt;KARACHI: Synthetic test body about cement despatches &amp;amp; prices.&lt;/p&gt;
+&lt;p&gt;&lt;em&gt;Published in Dawn, October 11th, 2026&lt;/em&gt;&lt;/p&gt;</description>
+      <content:encoded><![CDATA[<p>KARACHI: Synthetic test body about cement despatches &amp; prices.</p>
+<script>alert('x')</script><p><em>Published in Dawn, October 11th, 2026</em></p>]]></content:encoded>
+      <category>Business</category>
+      <guid>https://www.dawn.com/news/9000001</guid>
+      <pubDate>Sun, 11 Oct 2026 07:39:40 +0500</pubDate>
+    </item>
+    <!-- B: multi-stock by symbol tokens -->
+    <item>
+      <title>Banks and cement lead gains; HBL, LUCK among top contributors</title>
+      <link>https://www.dawn.com/news/9000002/banks-and-cement-lead-gains</link>
+      <description>&lt;p&gt;KARACHI: Synthetic market wrap.&lt;/p&gt;</description>
+      <content:encoded><![CDATA[<p>KARACHI: Synthetic market wrap.</p>]]></content:encoded>
+      <category>Business</category>
+      <guid>https://www.dawn.com/news/9000002</guid>
+      <pubDate>Sun, 11 Oct 2026 07:36:40 +0500</pubDate>
+    </item>
+    <!-- D: link-only stub body, non-business category -->
+    <item>
+      <title>Global growth set to slow, UN says</title>
+      <link>https://www.dawn.com/news/9000099/global-growth-set-to-slow-un-says</link>
+      <description>&lt;p&gt;&lt;a href="https://www.dawn.com/news/9000050"&gt;https://www.dawn.com/news/9000050&lt;/a&gt;&lt;/p&gt;</description>
+      <content:encoded><![CDATA[<p><a href="https://www.dawn.com/news/9000050">https://www.dawn.com/news/9000050</a></p>]]></content:encoded>
+      <category>World</category>
+      <guid>https://www.dawn.com/news/9000099</guid>
+      <pubDate>Sun, 11 Oct 2026 07:30:16 +0500</pubDate>
+    </item>
+    <!-- E: no pubDate -->
+    <item>
+      <title>Oil prices steady</title>
+      <link>https://www.dawn.com/news/9000003/oil-prices-steady</link>
+      <description>&lt;p&gt;Synthetic.&lt;/p&gt;</description>
+      <guid>https://www.dawn.com/news/9000003</guid>
+    </item>
+    <!-- F: unparseable pubDate -->
+    <item>
+      <title>Remittances edge up</title>
+      <link>https://www.dawn.com/news/9000004/remittances-edge-up</link>
+      <description>&lt;p&gt;Synthetic.&lt;/p&gt;</description>
+      <guid>https://www.dawn.com/news/9000004</guid>
+      <pubDate>sometime last week</pubDate>
+    </item>
+    <!-- G: same guid as A, different slug/link and a later edit of the headline (must dedup to A's url) -->
+    <item>
+      <title>Lucky Cement lifts quarterly profit (updated)</title>
+      <link>https://www.dawn.com/news/9000001/lucky-cement-quarterly-profit-up</link>
+      <description>&lt;p&gt;Synthetic.&lt;/p&gt;</description>
+      <guid>https://www.dawn.com/news/9000001</guid>
+      <pubDate>Sun, 11 Oct 2026 08:10:00 +0500</pubDate>
+    </item>
+    <!-- H: old item (for the `since` filter) listed AFTER newer ones, and NOT in date order -->
+    <item>
+      <title>Cotton arrivals rise</title>
+      <link>https://www.dawn.com/news/9000005/cotton-arrivals-rise</link>
+      <description>&lt;p&gt;Synthetic.&lt;/p&gt;</description>
+      <guid>https://www.dawn.com/news/9000005</guid>
+      <pubDate>Thu, 01 Oct 2026 09:00:00 +0500</pubDate>
+    </item>
+    <!-- I: future-dated (clock error at the source) -->
+    <item>
+      <title>Budget preview from the future</title>
+      <link>https://www.dawn.com/news/9000006/budget-preview</link>
+      <description>&lt;p&gt;Synthetic.&lt;/p&gt;</description>
+      <guid>https://www.dawn.com/news/9000006</guid>
+      <pubDate>Tue, 01 Jan 2030 09:00:00 +0500</pubDate>
+    </item>
+    <!-- J: empty title -->
+    <item>
+      <title>   </title>
+      <link>https://www.dawn.com/news/9000007/no-title</link>
+      <guid>https://www.dawn.com/news/9000007</guid>
+      <pubDate>Sun, 11 Oct 2026 06:00:00 +0500</pubDate>
+    </item>
+  </channel>
+</rss>

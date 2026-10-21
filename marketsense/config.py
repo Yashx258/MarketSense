@@ -33,6 +33,12 @@ class Settings:
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     news_enabled: bool = os.getenv("NEWS_COLLECTION_ENABLED", "false").lower() == "true"
     yahoo_suffix: str = os.getenv("YAHOO_SYMBOL_SUFFIX", ".KA")
+    # --- news collection / sentiment (see README "News & sentiment")
+    news_store_article_text: bool = os.getenv("NEWS_STORE_ARTICLE_TEXT", "false").lower() == "true"
+    news_user_agent: str = os.getenv("NEWS_USER_AGENT", "MarketSenseAcademicBot/0.1 (student research project)")
+    news_http_timeout: float = float(os.getenv("NEWS_HTTP_TIMEOUT_SECONDS", "20"))
+    news_cutoff_time: str = os.getenv("NEWS_CUTOFF_TIME_PKT", "17:00")   # post-close prediction cutoff, Asia/Karachi
+    sentiment_model: str = os.getenv("SENTIMENT_MODEL", "ProsusAI/finbert")
 
 
 def setup_logging() -> None:
