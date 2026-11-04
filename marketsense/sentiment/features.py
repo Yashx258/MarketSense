@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from sqlalchemy import and_, exists, select
 from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_, select
 
 from marketsense.config import Settings
 from marketsense.db.models import NewsArticle, NewsArticleStock, SentimentFeature
@@ -32,42 +33,219 @@ def cutoff_for_trading_date(trading_date: date, close_time: str | None = None, t
     return local.astimezone(timezone.utc)
 
 
-def sentiment_available_by(session: Session, cutoff: datetime, *, model_name: str = MODEL_NAME,
-                           lookback: timedelta | None = None, strict_retrieval: bool = False,
-                           stock_ids: list[int] | None = None, include_market_wide: bool = False) -> pd.DataFrame:
-    """Sentiment rows an observer standing at `cutoff` could have known. One row per (article, stock mentioned).
+PKT = ZoneInfo("Asia/Karachi")
 
-    include_market_wide=True also returns articles that mention no stock (stock_id = NaN).
+
+def availability_condition(cutoff):
     """
-    if cutoff.tzinfo is None:
+    SQL condition for whether an article could have been available by cutoff.
+
+    Exact timestamps:
+        published_at <= cutoff
+
+    Date-only timestamps:
+        published_date < the cutoff's PKT calendar date
+
+    A date-only article is deliberately not available on its recorded date,
+    because its actual publication time is unknown.
+    """
+    if cutoff.tzinfo is None or cutoff.utcoffset() is None:
         raise ValueError("cutoff must be timezone-aware")
-    cutoff = cutoff.astimezone(timezone.utc)
-    sf, na, nas = SentimentFeature, NewsArticle, NewsArticleStock
 
-    conds = [sf.model_name == model_name, na.published_at.is_not(None), na.published_at <= cutoff]
-    if strict_retrieval:
-        conds.append(na.retrieved_at <= cutoff)
-    if lookback is not None:
-        conds.append(na.published_at > cutoff - lookback)
+    cutoff_utc = cutoff.astimezone(timezone.utc)
+    cutoff_pkt_date = cutoff_utc.astimezone(PKT).date()
 
-    cols = [sf.news_id, na.published_at, na.retrieved_at, sf.positive_score, sf.neutral_score, sf.negative_score,
-            sf.sentiment_label]
-    q = (select(sf.news_id, nas.stock_id, *cols[1:]).select_from(sf)
-         .join(na, na.news_id == sf.news_id).join(nas, nas.news_id == na.news_id).where(and_(*conds)))
+    return or_(
+        and_(
+            NewsArticle.time_precision == "exact",
+            NewsArticle.published_at.is_not(None),
+            NewsArticle.published_at <= cutoff_utc,
+        ),
+        and_(
+            NewsArticle.time_precision == "date",
+            NewsArticle.published_date.is_not(None),
+            NewsArticle.published_date < cutoff_pkt_date,
+        ),
+    )
+
+
+def _lookback_condition(cutoff, lookback):
+    """Return a lower-bound condition appropriate to each precision type."""
+    if lookback is None:
+        return None
+
+    if not isinstance(lookback, timedelta):
+        raise TypeError("lookback must be a datetime.timedelta or None")
+
+    if lookback.total_seconds() < 0:
+        raise ValueError("lookback must not be negative")
+
+    cutoff_utc = cutoff.astimezone(timezone.utc)
+    cutoff_pkt_date = cutoff_utc.astimezone(PKT).date()
+    lower_utc = cutoff_utc - lookback
+    lower_pkt_date = lower_utc.astimezone(PKT).date()
+
+    return or_(
+        and_(
+            NewsArticle.time_precision == "exact",
+            NewsArticle.published_at.is_not(None),
+            NewsArticle.published_at >= lower_utc,
+        ),
+        and_(
+            NewsArticle.time_precision == "date",
+            NewsArticle.published_date.is_not(None),
+            NewsArticle.published_date >= lower_pkt_date,
+            NewsArticle.published_date < cutoff_pkt_date,
+        ),
+    )
+
+
+def articles_available_by(
+    session,
+    cutoff,
+    *,
+    lookback=None,
+    strict_retrieval=False,
+    stock_ids=None,
+    include_market_wide=False,
+):
+    """
+    Return article-stock rows that were available by cutoff.
+
+    Date-only rows become available on the day after published_date.
+    Rows with unknown or inconsistent time precision are excluded.
+
+    Market-wide articles have a NULL stock_id and are excluded unless
+    include_market_wide=True.
+    """
+    if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+        raise ValueError("cutoff must be timezone-aware")
+
+    cutoff_utc = cutoff.astimezone(timezone.utc)
+
+    stmt = (
+        select(
+            NewsArticle.news_id.label("news_id"),
+            NewsArticleStock.stock_id.label("stock_id"),
+            NewsArticle.published_at.label("published_at"),
+            NewsArticle.retrieved_at.label("retrieved_at"),
+        )
+        .select_from(NewsArticle)
+        .outerjoin(
+            NewsArticleStock,
+            NewsArticleStock.news_id == NewsArticle.news_id,
+        )
+        .where(availability_condition(cutoff_utc))
+    )
+
+    if not include_market_wide:
+        stmt = stmt.where(NewsArticleStock.stock_id.is_not(None))
+
     if stock_ids is not None:
-        q = q.where(nas.stock_id.in_(stock_ids))
-    frames = [pd.DataFrame(session.execute(q).all(), columns=COLUMNS)]
+        stock_ids = list(stock_ids)
+        if not stock_ids:
+            return pd.DataFrame(
+                columns=["news_id", "stock_id", "published_at", "retrieved_at"]
+            )
+        stmt = stmt.where(NewsArticleStock.stock_id.in_(stock_ids))
 
-    if include_market_wide:
-        q2 = (select(sf.news_id, *cols[1:]).select_from(sf).join(na, na.news_id == sf.news_id)
-              .where(and_(*conds), ~exists().where(nas.news_id == na.news_id)))
-        mw = pd.DataFrame(session.execute(q2).all(), columns=[c for c in COLUMNS if c != "stock_id"])
-        mw.insert(1, "stock_id", pd.NA)
-        frames.append(mw)
+    if strict_retrieval:
+        stmt = stmt.where(
+            NewsArticle.retrieved_at.is_not(None),
+            NewsArticle.retrieved_at <= cutoff_utc,
+        )
 
-    df = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
-    for c in ("published_at", "retrieved_at"):
-        df[c] = pd.to_datetime(df[c], utc=True)
-    for c in ("positive_score", "neutral_score", "negative_score"):
-        df[c] = df[c].astype(float)
-    return df.sort_values(["published_at", "news_id"]).reset_index(drop=True)
+    lookback_condition = _lookback_condition(cutoff_utc, lookback)
+    if lookback_condition is not None:
+        stmt = stmt.where(lookback_condition)
+
+    stmt = stmt.distinct().order_by(
+        NewsArticle.news_id,
+        NewsArticleStock.stock_id,
+    )
+
+    columns = ["news_id", "stock_id", "published_at", "retrieved_at"]
+    rows = session.execute(stmt).mappings().all()
+    return pd.DataFrame(rows, columns=columns)
+
+
+def sentiment_available_by(
+    session,
+    cutoff,
+    *,
+    model_name=MODEL_NAME,
+    lookback=None,
+    strict_retrieval=False,
+    stock_ids=None,
+):
+    """
+    Return sentiment scores only for articles available by cutoff.
+
+    Availability is determined from the original article's publication
+    precision and timestamp/date, not from sentiment processed_at.
+    """
+    if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+        raise ValueError("cutoff must be timezone-aware")
+
+    cutoff_utc = cutoff.astimezone(timezone.utc)
+
+    stmt = (
+        select(
+            SentimentFeature.news_id.label("news_id"),
+            SentimentFeature.stock_id.label("stock_id"),
+            NewsArticle.published_at.label("published_at"),
+            NewsArticle.retrieved_at.label("retrieved_at"),
+            SentimentFeature.positive_score.label("positive_score"),
+            SentimentFeature.neutral_score.label("neutral_score"),
+            SentimentFeature.negative_score.label("negative_score"),
+            SentimentFeature.sentiment_label.label("sentiment_label"),
+        )
+        .join(
+            NewsArticle,
+            NewsArticle.news_id == SentimentFeature.news_id,
+        )
+        .where(
+            availability_condition(cutoff_utc),
+            SentimentFeature.model_name == model_name,
+        )
+    )
+
+    if strict_retrieval:
+        stmt = stmt.where(
+            NewsArticle.retrieved_at.is_not(None),
+            NewsArticle.retrieved_at <= cutoff_utc,
+        )
+
+    if stock_ids is not None:
+        stock_ids = list(stock_ids)
+        if not stock_ids:
+            return pd.DataFrame(
+                columns=[
+                    "news_id", "stock_id", "published_at", "retrieved_at",
+                    "positive_score", "neutral_score", "negative_score",
+                    "sentiment_label",
+                ]
+            )
+        stmt = stmt.where(SentimentFeature.stock_id.in_(stock_ids))
+
+    lookback_condition = _lookback_condition(cutoff_utc, lookback)
+    if lookback_condition is not None:
+        stmt = stmt.where(lookback_condition)
+
+    stmt = stmt.order_by(
+        NewsArticle.news_id,
+        SentimentFeature.stock_id,
+    )
+
+    columns = [
+    "news_id",
+    "stock_id",
+    "published_at",
+    "retrieved_at",
+    "positive_score",
+    "neutral_score",
+    "negative_score",
+    "sentiment_label",
+    ]
+    rows = session.execute(stmt).mappings().all()
+    return pd.DataFrame(rows, columns=columns)

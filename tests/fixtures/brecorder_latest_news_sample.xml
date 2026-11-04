@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:media="http://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0">
+  <channel>
+    <title>Business Recorder - Latest News</title>
+    <link>https://www.brecorder.com/</link>
+    <description>Business Recorder</description>
+    <language>en-Us</language>
+    <copyright>Copyright 2026</copyright>
+    <pubDate>Mon, 12 Oct 2026 02:30:00 +0500</pubDate>
+    <ttl>60</ttl>
+    <!-- 1: local desk, market-wide (KSE-100 is a generic acronym, not a stock) -->
+    <item>
+      <title>KSE-100 gains as investors cheer rate outlook</title>
+      <link>https://www.brecorder.com/news/4000001/kse-100-gains-as-investors-cheer-rate-outlook</link>
+      <description>&lt;p&gt;KARACHI: Synthetic market wrap.&lt;/p&gt;</description>
+      <content:encoded><![CDATA[<p>KARACHI: Synthetic market wrap.</p>]]></content:encoded>
+      <author>none@none.com (BR Web Desk)</author>
+      <category>Markets</category>
+      <guid>https://www.brecorder.com/news/4000001</guid>
+      <pubDate>Sun, 11 Oct 2026 10:00:00 +0500</pubDate>
+    </item>
+    <!-- 2: company news written with the short name OGDCL (alias of OGDC) -->
+    <item>
+      <title>OGDCL initiates production from new well</title>
+      <link>https://www.brecorder.com/news/4000002/ogdcl-initiates-production-from-new-well</link>
+      <description>&lt;p&gt;KARACHI: Synthetic notice to the PSX.&lt;/p&gt;</description>
+      <content:encoded><![CDATA[<p>KARACHI: Synthetic notice to the PSX.</p>]]></content:encoded>
+      <author>none@none.com (BR Web Desk)</author>
+      <category>Companies</category>
+      <guid>https://www.brecorder.com/news/4000002</guid>
+      <pubDate>Sun, 11 Oct 2026 09:00:00 +0500</pubDate>
+    </item>
+    <!-- 3: Reuters wire copy: body must never be stored -->
+    <item>
+      <title>Oil prices rise on supply fears</title>
+      <link>https://www.brecorder.com/news/4000003/oil-prices-rise-on-supply-fears</link>
+      <description>&lt;p&gt;LONDON: Synthetic wire body.&lt;/p&gt;</description>
+      <content:encoded><![CDATA[<p>LONDON: Synthetic wire body.</p>]]></content:encoded>
+      <author>none@none.com (Reuters)</author>
+      <category>World</category>
+      <guid>https://www.brecorder.com/news/4000003</guid>
+      <pubDate>Sun, 11 Oct 2026 08:30:00 +0500</pubDate>
+    </item>
+    <!-- 4: AFP wire copy -->
+    <item>
+      <title>Global markets slip</title>
+      <link>https://www.brecorder.com/news/4000004/global-markets-slip</link>
+      <description>&lt;p&gt;PARIS: Synthetic wire body.&lt;/p&gt;</description>
+      <author>none@none.com (AFP)</author>
+      <guid>https://www.brecorder.com/news/4000004</guid>
+      <pubDate>Sun, 11 Oct 2026 08:00:00 +0500</pubDate>
+    </item>
+    <!-- 5: no author tag at all (body allowed) and two stocks by ticker -->
+    <item>
+      <title>HBL, LUCK among top contributors to index gain</title>
+      <link>https://www.brecorder.com/news/4000005/hbl-luck-top-contributors</link>
+      <description>&lt;p&gt;KARACHI: Synthetic.&lt;/p&gt;</description>
+      <guid>https://www.brecorder.com/news/4000005</guid>
+      <pubDate>Sun, 11 Oct 2026 07:00:00 +0500</pubDate>
+    </item>
+    <!-- 6: same guid as item 1, different slug (edited headline) -->
+    <item>
+      <title>KSE-100 gains as investors cheer rate outlook (updated)</title>
+      <link>https://www.brecorder.com/news/4000001/kse-100-gains-on-rate-outlook</link>
+      <description>&lt;p&gt;Synthetic.&lt;/p&gt;</description>
+      <author>none@none.com (BR Web Desk)</author>
+      <guid>https://www.brecorder.com/news/4000001</guid>
+      <pubDate>Sun, 11 Oct 2026 10:45:00 +0500</pubDate>
+    </item>
+  </channel>
+</rss>

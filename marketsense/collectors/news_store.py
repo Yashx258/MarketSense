@@ -21,9 +21,15 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from sqlalchemy import insert, select, text
 from sqlalchemy.orm import Session
 
+import csv
+from pathlib import Path
+from collections.abc import Mapping
+
 from marketsense.collectors.base import NewsItem
 from marketsense.db.connection import dialect_insert
 from marketsense.db.models import NewsArticle, NewsArticleStock, Stock
+import re
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 log = logging.getLogger(__name__)
 
@@ -38,9 +44,13 @@ GENERIC_ACRONYMS = frozenset({
 })
 _NAME_SUFFIXES = {"limited", "ltd", "pvt", "private", "corporation", "corp", "company", "co", "plc", "inc", "the"}
 _SYMBOL_TOKEN = re.compile(r"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{2,9})(?![A-Za-z0-9])")
-
+AMBIGUOUS_TICKER_TOKENS = frozenset({
+    "POL",  # petroleum / petroleum products
+    "NPL",  # non-performing loans
+})
 
 # ------------------------------------------------------------------------------------------ URL normalisation
+
 def normalize_url(url: str | None) -> str | None:
     """Canonical form used as the dedup key. Returns None for empty / non-http(s) / host-less input.
 
@@ -55,9 +65,14 @@ def normalize_url(url: str | None) -> str | None:
     if scheme not in ("http", "https") or not host:
         return None
     netloc = host if parts.port in (None, _DEFAULT_PORTS[scheme]) else f"{host}:{parts.port}"
+    
     path = parts.path or "/"
+    # Normalize slugged news article paths (e.g., /news/1526991/some-slug -> /news/1526991)
+    path = re.sub(r'^(/news/\d+)(?:/.*)?$', r'\1', path)
+
     if len(path) > 1 and path.endswith("/"):
         path = path.rstrip("/") or "/"
+        
     query = urlencode(sorted((k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
                              if not k.lower().startswith("utm_") and k.lower() not in _TRACKING_PARAMS))
     return urlunsplit((scheme, netloc, path, query, ""))
@@ -83,39 +98,119 @@ def _name_stem(company_name: str | None) -> str | None:
 
 @dataclass
 class StockIndex:
-    by_symbol: dict[str, int] = field(default_factory=dict)      # 'LUCK' -> stock_id
-    names: list[tuple[str, int]] = field(default_factory=list)   # [('lucky cement', stock_id), ...] longest first
+    by_symbol: dict[str, int] = field(default_factory=dict)
+    names: list[tuple[str, int]] = field(default_factory=list)
+    alias_symbols: dict[str, int] = field(default_factory=dict)
 
+def build_stock_index(
+    session: Session,
+    aliases: dict[str, str] | None = None,
+) -> StockIndex:
+    rows = session.execute(
+        select(Stock.stock_id, Stock.symbol, Stock.company_name)
+    ).all()
 
-def build_stock_index(session: Session) -> StockIndex:
-    rows = session.execute(select(Stock.stock_id, Stock.symbol, Stock.company_name)).all()
-    idx = StockIndex(by_symbol={sym.upper(): sid for sid, sym, _ in rows})
+    idx = StockIndex(
+        by_symbol={
+            sym.upper(): sid
+            for sid, sym, _ in rows
+            if sym
+        }
+    )
+
+    # Build unambiguous company-name stems.
     stems: dict[str, set[int]] = {}
+
     for sid, _, name in rows:
         stem = _name_stem(name)
         if stem:
             stems.setdefault(stem, set()).add(sid)
-    # a stem shared by several stocks (e.g. two share classes) is ambiguous: never guess
-    idx.names = sorted(((st, next(iter(ids))) for st, ids in stems.items() if len(ids) == 1),
-                       key=lambda t: -len(t[0]))
+
+    idx.names = sorted(
+        (
+            (stem, next(iter(stock_ids)))
+            for stem, stock_ids in stems.items()
+            if len(stock_ids) == 1
+        ),
+        key=lambda item: -len(item[0]),
+    )
+
+    # Resolve aliases only when their destination symbol exists.
+    for alias, symbol in (aliases or {}).items():
+        alias = (alias or "").strip().upper()
+        symbol = (symbol or "").strip().upper()
+
+        if not alias or not symbol:
+            continue
+
+        stock_id = idx.by_symbol.get(symbol)
+
+        if stock_id is not None:
+            idx.alias_symbols[alias] = stock_id
+
     return idx
 
+def load_aliases(path: str | Path) -> dict[str, str]:
+    """Load company aliases from CSV columns: alias, symbol, note.
+
+    Returns alias -> stock symbol. Unknown stock symbols are filtered
+    later by build_stock_index(), not guessed.
+    """
+    path = Path(path)
+
+    if not path.is_file():
+        return {}
+
+    aliases: dict[str, str] = {}
+
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            alias = (row.get("alias") or "").strip().upper()
+            symbol = (row.get("symbol") or "").strip().upper()
+
+            if alias and symbol:
+                aliases[alias] = symbol
+
+    return aliases
 
 def match_stocks(text_: str, index: StockIndex) -> dict[int, str]:
-    """{stock_id: 'symbol'|'name'} for stocks the text mentions. Conservative: precision over recall.
+    """Return {stock_id: matching_method} using conservative evidence.
 
-    * symbol: an UPPER-CASE token (>=3 chars) equal to a known symbol and not a generic acronym ('PSX', 'IMF', ...)
-    * name:   normalised company-name stem (>=2 words or >=8 chars) appearing on word boundaries
+    Methods:
+      symbol: unambiguous uppercase stock symbol
+      alias: explicitly configured company alias
+      name: unambiguous company-name stem
+
+    Ambiguous ticker tokens are never linked from text alone.
     """
     found: dict[int, str] = {}
-    for tok in _SYMBOL_TOKEN.findall(text_ or ""):
-        sid = index.by_symbol.get(tok)
-        if sid is not None and tok not in GENERIC_ACRONYMS:
-            found[sid] = "symbol"
-    padded = f" {_norm(text_ or '')} "
-    for stem, sid in index.names:
-        if sid not in found and f" {stem} " in padded:
-            found[sid] = "name"
+    text_ = text_ or ""
+
+    # 1. Direct uppercase stock symbols.
+    for token in _SYMBOL_TOKEN.findall(text_):
+        stock_id = index.by_symbol.get(token)
+
+        if (
+            stock_id is not None
+            and token not in GENERIC_ACRONYMS
+            and token not in AMBIGUOUS_TICKER_TOKENS
+        ):
+            found[stock_id] = "symbol"
+
+    # 2. Explicitly configured aliases.
+    for token in _SYMBOL_TOKEN.findall(text_):
+        stock_id = index.alias_symbols.get(token)
+
+        if stock_id is not None:
+            found.setdefault(stock_id, "alias")
+
+    # 3. Company-name matches.
+    padded = f" {_norm(text_)} "
+
+    for stem, stock_id in index.names:
+        if stock_id not in found and f" {stem} " in padded:
+            found[stock_id] = "name"
+
     return found
 
 
@@ -140,6 +235,22 @@ class StoreReport:
         if self.unknown_symbols:
             lines.append("unknown source tickers (not in stocks): " + ", ".join(f"{k}x{v}" for k, v in sorted(self.unknown_symbols.items())))
         return "\n".join(lines)
+
+    def merge(self, o: "StoreReport") -> None:
+        for f in (
+            "received",
+            "inserted",
+            "duplicates",
+            "duplicates_in_batch",
+            "rejected",
+            "stored_without_timestamp",
+            "articles_with_stocks",
+            "stock_links",
+        ):
+            setattr(self, f, getattr(self, f) + getattr(o, f))
+
+        for k, v in o.unknown_symbols.items():
+            self.unknown_symbols[k] = self.unknown_symbols.get(k, 0) + v
 
 
 def _to_utc(dt: datetime | None) -> datetime | None:
@@ -166,7 +277,7 @@ def _insert_article(session: Session, row: dict) -> int | None:
     return session.execute(insert(NewsArticle).values(**row).returning(NewsArticle.news_id)).scalar_one()
 
 
-def store_news(session: Session, items: list[NewsItem], index: StockIndex | None = None) -> StoreReport:
+def store_news(session: Session, items: list[NewsItem], index: StockIndex | None = None, batch_id: int | None = None,) -> StoreReport:
     """Persist items idempotently. Caller owns the transaction (use `session_scope`). Safe to re-run."""
     rep = StoreReport(received=len(items))
     index = index or build_stock_index(session)
@@ -201,9 +312,19 @@ def store_news(session: Session, items: list[NewsItem], index: StockIndex | None
         for sid, how in match_stocks(f"{headline}. {it.article_text or ''}", index).items():
             stocks.setdefault(sid, how)
 
-        row = dict(stock_id=next(iter(stocks)) if len(stocks) == 1 else None, headline=headline,
-                   article_text=it.article_text or None, source=it.source, url=url,
-                   published_at=published, language=(it.language or "en")[:10])
+        row = dict(
+            stock_id=next(iter(stocks)) if len(stocks) == 1 else None,
+            headline=headline,
+            article_text=it.article_text or None,
+            source=it.source,
+            url=url,
+            published_at=published,
+            language=(it.language or "en")[:10],
+            category=it.category,
+            doc_type=getattr(it, "doc_type", None) or "news",
+            source_record_id=it.source_record_id,
+            import_batch_id=batch_id,
+        )
         news_id = _insert_article(session, row)
         if news_id is None:
             rep.duplicates += 1

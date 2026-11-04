@@ -56,7 +56,10 @@ class NewsItem:
     published_at: datetime | None = None      # timezone-aware, UTC. None = the source gave no usable timestamp
     language: str = "en"
     symbols: list[str] = field(default_factory=list)   # tickers the SOURCE tagged explicitly (rare); text matching is separate
-
+    category: str | None = None
+    time_precision: str | None = None
+    doc_type: str | None = None
+    source_record_id: str | None = None
 
 class NewsCollector(ABC):
     """Implement `fetch()` for one source. Prefer official RSS/APIs; check ToS + robots.txt first."""

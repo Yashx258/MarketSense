@@ -1,10 +1,12 @@
 """News collectors.
 
-IMPLEMENTED (feed + terms reviewed, see README "News & sentiment"):
-    dawn_business   Dawn Business RSS  https://www.dawn.com/feeds/business
+IMPLEMENTED RSS collectors (review source terms before persistent collection):
+    dawn_business          https://www.dawn.com/feeds/business (shared PSX relevance filter)
+    business_recorder      https://www.brecorder.com/feeds/latest-news (shared PSX relevance filter)
 
-NOT IMPLEMENTED (feed endpoint and terms NOT verified, so deliberately left as placeholders):
-    business_recorder, profit_pakistan_today
+DISABLED:
+    profit_pakistan_today  configured Opinion feed returned HTTP 404; do not retry until a valid
+                           publisher feed or licensed API is verified.
 
 Storage lives in news_store.py (`store_news` is re-exported here for backward compatibility).
 """
@@ -24,6 +26,7 @@ import requests
 
 from marketsense.collectors.base import NewsCollector, NewsFetchBlocked, NewsFetchError, NewsItem, robots_allows
 from marketsense.collectors.news_store import normalize_url, store_news  # noqa: F401  (store_news re-exported)
+from marketsense.collectors.news_relevance import classify_news
 from marketsense.config import Settings
 
 log = logging.getLogger(__name__)
@@ -90,7 +93,7 @@ class RssNewsCollector(NewsCollector):
             self.feed_url = feed_url
         # Dawn's terms allow copying content only for personal non-commercial use -> article bodies are OPT-IN.
         self.store_article_text = self.settings.news_store_article_text if store_article_text is None else store_article_text
-        self.stats: dict[str, int] = {}
+        self.stats: dict[str, object] = {}
 
     # ---- network
     def fetch_bytes(self) -> bytes:
@@ -125,6 +128,10 @@ class RssNewsCollector(NewsCollector):
     def canonical_url(self, entry) -> str | None:
         return entry.get("link") or None
 
+    def is_relevant(self, headline: str, summary: str) -> bool:
+        """Compatibility hook: only strong `include` decisions pass the storage gate."""
+        return classify_news(headline, summary).status == "include"
+
     # ---- parsing (pure: no network, used directly by tests)
     def _published(self, entry) -> datetime | None:
         """Aware UTC datetime, or None. Never guesses a zone for naive strings; rejects future-dated items."""
@@ -154,8 +161,9 @@ class RssNewsCollector(NewsCollector):
         # version check it would be reported as a successful (empty) run. A genuine empty feed has version 'rss20' etc.
         if not feed.entries and (feed.get("bozo") or not feed.get("version")):
             raise NewsFetchError(f"could not parse feed ({feed.get('bozo_exception') or 'response is not an RSS/Atom feed'})")
-        self.stats = dict(entries=0, items=0, no_title=0, no_timestamp=0, future_dated=0, older_than_since=0,
-                          with_body=0, link_only_body=0)
+        self.stats = dict(entries=0, items=0, parsed=0, relevant=0, review=0, rejected_irrelevant=0,
+                          no_title=0, no_timestamp=0, future_dated=0, older_than_since=0,
+                          with_body=0, link_only_body=0, review_examples=[], rejected_examples=[])
         lang = (feed.feed.get("language") or self.language).replace("_", "-").split("-")[0].lower()[:10] or self.language
         items: list[NewsItem] = []
         for e in feed.entries:                      # NB: feeds are NOT sorted by date; never stop at the first old item
@@ -176,6 +184,22 @@ class RssNewsCollector(NewsCollector):
                 self.stats["link_only_body"] += 1          # stub item: body is only a pointer to another article
                 body = ""
             self.stats["with_body"] += bool(body)
+            self.stats["parsed"] += 1
+            categories = tuple(
+                str(tag.get("term") or tag.get("label") or "")
+                for tag in (e.get("tags") or [])
+                if isinstance(tag, dict)
+            )
+            decision = classify_news(headline, body, categories)
+            if decision.status == "review":
+                self.stats["review"] += 1
+                self.stats["review_examples"].append((headline, decision.reason, decision.topic))
+                continue
+            if decision.status != "include":
+                self.stats["rejected_irrelevant"] += 1
+                self.stats["rejected_examples"].append((headline, decision.reason, decision.topic))
+                continue
+            self.stats["relevant"] += 1
             items.append(NewsItem(headline=headline, source=self.name, url=self.canonical_url(e),
                                   article_text=body if (body and self.store_article_text) else None,
                                   published_at=published, language=lang))
@@ -206,22 +230,22 @@ class DawnBusinessCollector(RssNewsCollector):
         return entry.get("link") or None
 
 
-class _UnverifiedSource(NewsCollector):
-    base_url: str = ""
-
-    def fetch(self, since: datetime | None = None) -> list[NewsItem]:
-        raise NotImplementedError(
-            f"{self.name}: not implemented. The feed endpoint and terms of use have NOT been verified. "
-            f"Review {self.base_url}/robots.txt and the site's terms, confirm an RSS feed/licensed API exists, "
-            "then subclass RssNewsCollector (see DawnBusinessCollector) and set enabled=True.")
+class BusinessRecorderCollector(RssNewsCollector):
+    """Business Recorder latest-news RSS, filtered by the shared MarketSense relevance gate."""
+    name = "business_recorder"
+    feed_url = "https://www.brecorder.com/feeds/latest-news"
+    enabled = True
 
 
-class BusinessRecorderCollector(_UnverifiedSource):
-    name, base_url = "business_recorder", "https://www.brecorder.com"
+class ProfitPakistanTodayCollector(RssNewsCollector):
+    """Disabled: the previously configured Opinion feed returned HTTP 404.
 
-
-class ProfitPakistanTodayCollector(_UnverifiedSource):
-    name, base_url = "profit_pakistan_today", "https://profit.pakistantoday.com.pk"
+    Do not guess replacement URLs or scrape pages. Re-enable only after a valid publisher feed
+    or licensed API and applicable usage terms are verified.
+    """
+    name = "profit_pakistan_today"
+    feed_url = "https://profit.pakistantoday.com.pk/category/opinion/feed"
+    enabled = False
 
 
 REGISTRY: dict[str, type[NewsCollector]] = {c.name: c for c in

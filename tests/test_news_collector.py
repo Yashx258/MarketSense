@@ -49,7 +49,7 @@ def test_parse_fixture_counts_and_order(dawn_xml):
     c = collector(store_article_text=False)
     items = c.parse(dawn_xml)
     assert c.stats == dict(entries=9, items=8, no_title=1, no_timestamp=3, future_dated=1, older_than_since=0,
-                           with_body=7, link_only_body=1)
+                           with_body=7, link_only_body=1, body_withheld=0)
     stamped = [i.published_at for i in items if i.published_at]
     assert stamped == sorted(stamped, reverse=True)                           # newest first
     assert [i.published_at is None for i in items] == [False] * 5 + [True] * 3   # timestamp-less items last
@@ -192,12 +192,23 @@ def test_html_error_page_with_200_is_rejected():
 
 
 # ------------------------------------------------------------------------------------------ registry / placeholders
-def test_unverified_sources_refuse_honestly():
-    for cls in (BusinessRecorderCollector, ProfitPakistanTodayCollector):
-        with pytest.raises(NotImplementedError, match="NOT been verified"):
-            cls().fetch()
-        assert cls.enabled is False
-    assert DawnBusinessCollector.enabled is True and set(REGISTRY) == {"dawn_business", "business_recorder", "profit_pakistan_today"}
+def test_profit_has_no_default_endpoint_and_refuses_without_a_user_supplied_url():
+    c = ProfitPakistanTodayCollector(settings=Settings(profit_feed_url=""))
+    assert c.feed_url == "" and ProfitPakistanTodayCollector.feed_verified is False
+    with pytest.raises(NewsFetchBlocked, match="no feed URL configured"):
+        c.fetch()
+    assert DawnBusinessCollector.feed_verified and BusinessRecorderCollector.feed_verified
+    assert set(REGISTRY) == {"dawn_business", "business_recorder", "profit_pakistan_today"}
+
+
+def test_profit_works_through_the_standard_rss_pipeline_once_a_url_is_supplied(dawn_xml):
+    url = "https://example.test/feed"
+    http = FakeHttp({"https://example.test/robots.txt": Resp(404), url: Resp(200, dawn_xml)})
+    c = ProfitPakistanTodayCollector(settings=Settings(), http=http, feed_url=url, sleep=lambda s: None, now=lambda: NOW)
+    items = c.fetch()
+    assert len(items) == 8 and all(i.source == "profit_pakistan_today" for i in items)
+    assert [u for u, *_ in http.calls] == ["https://example.test/robots.txt", url]          # robots.txt is still checked first
+    assert ProfitPakistanTodayCollector(settings=Settings(profit_feed_url=url)).feed_url == url   # env/config route
 
 
 # ------------------------------------------------------------------------------------------ CLI
@@ -219,9 +230,14 @@ def test_cli_refuses_without_enable_flag(capsys):
     assert "NEWS_COLLECTION_ENABLED" in capsys.readouterr().err
 
 
-def test_cli_refuses_unverified_source(capsys):
-    assert cli.main(["--source", "business_recorder", "--dry-run"]) == 2
-    assert "NOT been verified" in capsys.readouterr().err
+def test_cli_refuses_profit_without_a_feed_url(capsys):
+    assert cli.main(["--source", "profit_pakistan_today", "--dry-run"]) == 2
+    assert "no feed URL configured" in capsys.readouterr().err
+
+
+def test_cli_warns_when_the_endpoint_is_user_supplied(feed_bytes, capsys):
+    assert cli.main(["--source", "profit_pakistan_today", "--check", "--feed-url", "https://example.test/feed"]) == 0
+    assert "NO feed endpoint verified by this project" in capsys.readouterr().err
 
 
 def test_cli_check_needs_no_database_or_flag(feed_bytes, capsys):

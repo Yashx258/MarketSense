@@ -55,6 +55,18 @@ class NewsArticle(Base):
     retrieved_at: Mapped[datetime] = mapped_column(TS, server_default=func.now(), nullable=False)
     language: Mapped[str] = mapped_column(String(10), nullable=False, default="en", server_default="en")
     created_at: Mapped[datetime] = mapped_column(TS, server_default=func.now(), nullable=False)
+    doc_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="news", server_default="news"
+    )
+    category: Mapped[str | None] = mapped_column(String(60))
+    published_date: Mapped[date | None] = mapped_column(Date)
+    time_precision: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="exact", server_default="exact"
+    )
+    source_record_id: Mapped[str | None] = mapped_column(String(100))
+    import_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("import_batches.batch_id", ondelete="SET NULL")
+    )
     __table_args__ = (Index("uq_news_url", "url", unique=True,
                             postgresql_where=text("url IS NOT NULL"), sqlite_where=text("url IS NOT NULL")),)
 
@@ -107,3 +119,44 @@ class SentimentFeature(Base):
     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
     processed_at: Mapped[datetime] = mapped_column(TS, server_default=func.now(), nullable=False)
     __table_args__ = (UniqueConstraint("news_id", "model_name", name="uq_sent_news_model"),)
+
+
+class ImportBatch(Base):
+    """Tracks historical news-file imports and their results."""
+    __tablename__ = "import_batches"
+
+    batch_id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
+    source_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    file_name: Mapped[str | None] = mapped_column(Text)
+    file_sha256: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="running", server_default="running"
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        TS, server_default=func.now(), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(TS)
+    rows_read: Mapped[int | None] = mapped_column(Integer)
+    rows_inserted: Mapped[int | None] = mapped_column(Integer)
+    rows_duplicate: Mapped[int | None] = mapped_column(Integer)
+    rows_rejected: Mapped[int | None] = mapped_column(Integer)
+    report: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running','completed','failed','superseded')",
+            name="ck_import_batches_status",
+        ),
+        Index(
+            "uq_import_source_file",
+            "source_name",
+            "file_sha256",
+            unique=True,
+            postgresql_where=text(
+                "file_sha256 IS NOT NULL AND status = 'completed'"
+            ),
+            sqlite_where=text(
+                "file_sha256 IS NOT NULL AND status = 'completed'"
+            ),
+        ),
+    )

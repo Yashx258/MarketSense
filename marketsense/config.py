@@ -39,6 +39,7 @@ class Settings:
     news_http_timeout: float = float(os.getenv("NEWS_HTTP_TIMEOUT_SECONDS", "20"))
     news_cutoff_time: str = os.getenv("NEWS_CUTOFF_TIME_PKT", "17:00")   # post-close prediction cutoff, Asia/Karachi
     sentiment_model: str = os.getenv("SENTIMENT_MODEL", "ProsusAI/finbert")
+    import_report_dir: str = os.getenv("data/import_reports")
 
 
 def setup_logging() -> None:
