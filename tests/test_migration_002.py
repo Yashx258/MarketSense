@@ -6,6 +6,8 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
+from scripts import init_db
+
 URL = os.getenv("TEST_DATABASE_URL", "")
 pytestmark = pytest.mark.skipif(not URL.startswith("postgresql") or "test" not in URL.rsplit("/", 1)[-1],
                                 reason="needs TEST_DATABASE_URL=postgresql+psycopg2://.../<db with 'test' in its name> (the schema is dropped!)")
@@ -76,3 +78,44 @@ def test_schema_sql_and_orm_models_agree_on_news_columns(eng):
     for model in (NewsArticle, ImportBatch):
         db_cols = {c["name"] for c in insp.get_columns(model.__tablename__)}
         assert db_cols == {c.name for c in model.__table__.columns}, model.__tablename__
+
+
+def test_fresh_init_matches_upgrade_with_existing_data(eng, monkeypatch):
+    before = {
+        table: q(eng, f"SELECT * FROM {table} ORDER BY 1")
+        for table in ("stocks", "news_article_stocks", "sentiment_features")
+    }
+    with eng.begin() as conn:
+        conn.exec_driver_sql("CREATE SCHEMA fresh_init")
+    fresh = create_engine(URL, connect_args={"options": "-csearch_path=fresh_init"})
+    try:
+        for engine in (fresh, eng, eng):
+            monkeypatch.setattr(init_db, "get_engine", lambda: engine)
+            init_db.main()
+
+        def signature(engine):
+            inspector = inspect(engine)
+            return {
+                table: {
+                    "columns": [(c["name"], str(c["type"]), c["nullable"], c["default"])
+                                for c in inspector.get_columns(table)],
+                    "checks": inspector.get_check_constraints(table),
+                    "foreign_keys": inspector.get_foreign_keys(table),
+                    "primary_key": inspector.get_pk_constraint(table),
+                    "unique": inspector.get_unique_constraints(table),
+                    "indexes": inspector.get_indexes(table),
+                }
+                for table in inspector.get_table_names()
+            }
+
+        assert signature(fresh) == signature(eng)
+        for table, rows in before.items():
+            assert q(eng, f"SELECT * FROM {table} ORDER BY 1") == rows
+        assert q(eng, "SELECT headline, time_precision, published_date::text FROM news_articles ORDER BY news_id") == [
+            ("legacy dated", "exact", "2026-02-06"),
+            ("legacy undated", "none", None),
+        ]
+    finally:
+        fresh.dispose()
+        with eng.begin() as conn:
+            conn.exec_driver_sql("DROP SCHEMA fresh_init CASCADE")

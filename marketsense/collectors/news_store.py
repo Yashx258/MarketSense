@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import insert, select, text
 from sqlalchemy.orm import Session
@@ -28,13 +29,35 @@ from collections.abc import Mapping
 from marketsense.collectors.base import NewsItem
 from marketsense.db.connection import dialect_insert
 from marketsense.db.models import NewsArticle, NewsArticleStock, Stock
-import re
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 log = logging.getLogger(__name__)
 
 _TRACKING_PARAMS = {"fbclid", "gclid", "mc_cid", "mc_eid", "igshid", "ref", "ref_src", "_ga", "yclid", "msclkid"}
 _DEFAULT_PORTS = {"http": 80, "https": 443}
+_PUBLISHER_HOSTS = {
+    "dawn.com": "www.dawn.com", "www.dawn.com": "www.dawn.com",
+    "brecorder.com": "www.brecorder.com", "www.brecorder.com": "www.brecorder.com",
+}
+_ARTICLE_PATH = re.compile(r"^(/news/[0-9]+)(?:/.*)?$")
+PKT = ZoneInfo("Asia/Karachi")
+
+
+def _normalized_query(query: str) -> str:
+    return urlencode(sorted((key, value) for key, value in parse_qsl(query, keep_blank_values=True)
+                            if not key.lower().startswith("utm_") and key.lower() not in _TRACKING_PARAMS))
+
+
+def publisher_article_url(url: str | None, publisher_host: str | None = None) -> str | None:
+    """Return the stable ID URL for a Dawn or Business Recorder article."""
+    parts = urlsplit(url.strip()) if url else None
+    if not parts or parts.scheme not in _DEFAULT_PORTS:
+        return None
+    host = _PUBLISHER_HOSTS.get(parts.hostname)
+    article = _ARTICLE_PATH.fullmatch(parts.path)
+    if host and article and (publisher_host is None or host == publisher_host):
+        if parts.port in (None, _DEFAULT_PORTS[parts.scheme]):
+            return urlunsplit(("https", host, article[1], _normalized_query(parts.query), ""))
+    return None
 
 # All-caps tokens that are NOT stock symbols even if a symbol with the same letters ever exists.
 GENERIC_ACRONYMS = frozenset({
@@ -59,6 +82,9 @@ def normalize_url(url: str | None) -> str | None:
     """
     if not url or not url.strip():
         return None
+    article_url = publisher_article_url(url)
+    if article_url:
+        return article_url
     parts = urlsplit(url.strip())
     scheme = parts.scheme.lower()
     host = (parts.hostname or "").lower()
@@ -67,15 +93,14 @@ def normalize_url(url: str | None) -> str | None:
     netloc = host if parts.port in (None, _DEFAULT_PORTS[scheme]) else f"{host}:{parts.port}"
     
     path = parts.path or "/"
-    # Normalize slugged news article paths (e.g., /news/1526991/some-slug -> /news/1526991)
-    path = re.sub(r'^(/news/\d+)(?:/.*)?$', r'\1', path)
+    match = _ARTICLE_PATH.fullmatch(path)
+    if match:
+        path = match[1]
 
     if len(path) > 1 and path.endswith("/"):
         path = path.rstrip("/") or "/"
         
-    query = urlencode(sorted((k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
-                             if not k.lower().startswith("utm_") and k.lower() not in _TRACKING_PARAMS))
-    return urlunsplit((scheme, netloc, path, query, ""))
+    return urlunsplit((scheme, netloc, path, _normalized_query(parts.query), ""))
 
 
 # ------------------------------------------------------------------------------------------ ticker matching
@@ -269,10 +294,12 @@ def _insert_article(session: Session, row: dict) -> int | None:
                 .on_conflict_do_nothing(index_elements=["url"], index_where=text("url IS NOT NULL"))
                 .returning(NewsArticle.news_id))
         return session.execute(stmt).scalar_one_or_none()
-    existing = session.execute(select(NewsArticle.news_id).where(
+    existing = select(NewsArticle.news_id).where(
         NewsArticle.url.is_(None), NewsArticle.source == row["source"],
-        NewsArticle.headline == row["headline"], NewsArticle.published_at == row["published_at"])).first()
-    if existing:
+        NewsArticle.headline == row["headline"], NewsArticle.published_at == row["published_at"])
+    if row["published_at"] is None:
+        existing = existing.where(NewsArticle.published_date == row["published_date"])
+    if session.execute(existing).first():
         return None
     return session.execute(insert(NewsArticle).values(**row).returning(NewsArticle.news_id)).scalar_one()
 
@@ -292,10 +319,14 @@ def store_news(session: Session, items: list[NewsItem], index: StockIndex | None
         headline = " ".join((it.headline or "").split())
         url = normalize_url(it.url)
         published = _to_utc(it.published_at)
-        if not headline or (url is None and published is None):
+        published_date = (
+            published.astimezone(PKT).date()
+            if published is not None else it.published_date if it.time_precision == "date" else None
+        )
+        if not headline or (url is None and published is None and published_date is None):
             rep.rejected += 1
             continue
-        key = ("url", url) if url else ("nourl", it.source, headline, published)
+        key = ("url", url) if url else ("nourl", it.source, headline, published, published_date)
         if key in seen:
             rep.duplicates_in_batch += 1
             continue
@@ -319,6 +350,8 @@ def store_news(session: Session, items: list[NewsItem], index: StockIndex | None
             source=it.source,
             url=url,
             published_at=published,
+            published_date=published_date,
+            time_precision="exact" if published is not None else "date" if published_date else "none",
             language=(it.language or "en")[:10],
             category=it.category,
             doc_type=getattr(it, "doc_type", None) or "news",

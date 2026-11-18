@@ -205,7 +205,7 @@ def build_items(table, mapping, profile: ImportProfile, *, source: str | None, d
         items.append(NewsItem(headline=headline, source=row_source, url=url, category=category, article_text=text if (store_text and text) else None,
                               published_at=pt.published_at, time_precision=pt.precision,
                               language=(_clean(get("language")) or profile.language)[:10], symbols=syms,
-                              doc_type=doc_type, source_record_id=rec_id))
+                              doc_type=doc_type, source_record_id=rec_id, published_date=pt.published_date))
     rep._all_rejects = all_rejects                       # full list for the reject CSV (not part of the JSON report)
     rep.rows_read = len(df)
     rep.rows_parsed = len(items)

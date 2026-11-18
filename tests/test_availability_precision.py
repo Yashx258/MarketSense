@@ -83,6 +83,8 @@ def test_sentiment_query_applies_the_same_date_only_rule(news_session):
     s = news_session
     ok = add(s, "yesterday scored", pdate=date(2026, 10, 8), precision="date", syms=["LUCK"], scored=True)
     same = add(s, "today scored", pdate=date(2026, 10, 9), precision="date", syms=["LUCK"], scored=True)
+    add(s, "date-only with contradictory future timestamp", pdate=date(2026, 10, 8), precision="date",
+        published=CUTOFF + timedelta(hours=1), syms=["LUCK"], scored=True)
     assert ids(sentiment_available_by(s, CUTOFF)) == {ok}
 
 

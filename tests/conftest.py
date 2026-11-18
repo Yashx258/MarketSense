@@ -1,6 +1,7 @@
 """Shared fixtures. SQLite in memory by default; set TEST_DATABASE_URL=postgresql+psycopg2://... to run on PostgreSQL."""
 import os
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.orm import Session
@@ -9,6 +10,14 @@ from marketsense.db.connection import get_engine
 from marketsense.db.models import Base, Stock
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
+
+
+@pytest.fixture()
+def include_all_feed_items(monkeypatch):
+    """Isolate parser and storage tests from the PSX relevance classifier."""
+    from marketsense.collectors import news_collector
+
+    monkeypatch.setattr(news_collector, "classify_news", lambda *args: SimpleNamespace(status="include"))
 
 
 @pytest.fixture()

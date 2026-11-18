@@ -89,9 +89,10 @@ def test_strict_mode_also_requires_retrieval_before_the_cutoff(news_session):
 def test_lookback_window(news_session):
     s = news_session
     new = article(s, "new", CUTOFF - timedelta(hours=5), ["LUCK"])
+    bound = article(s, "at the lower bound", CUTOFF - timedelta(days=1), ["LUCK"])
     old = article(s, "old", CUTOFF - timedelta(days=3), ["LUCK"])
     assert set(sentiment_available_by(s, CUTOFF, lookback=timedelta(days=1)).news_id) == {new}
-    assert set(sentiment_available_by(s, CUTOFF, lookback=timedelta(days=5)).news_id) == {new, old}
+    assert set(sentiment_available_by(s, CUTOFF, lookback=timedelta(days=5)).news_id) == {new, bound, old}
 
 
 # ------------------------------------------------------------------------------------------ shape / joins
@@ -112,6 +113,7 @@ def test_market_wide_articles_are_opt_in(news_session):
     assert list(sentiment_available_by(s, CUTOFF).news_id) == [stock]
     df = sentiment_available_by(s, CUTOFF, include_market_wide=True)
     assert set(df.news_id) == {market, stock} and df.loc[df.news_id == market, "stock_id"].isna().all()
+    assert list(sentiment_available_by(s, CUTOFF, stock_ids=[sid(s, "HBL")], include_market_wide=True).news_id) == [market]
 
 
 def test_unscored_articles_and_other_models_are_excluded(news_session):

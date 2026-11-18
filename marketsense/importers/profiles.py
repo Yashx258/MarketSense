@@ -47,7 +47,8 @@ PROFILES: dict[str, ImportProfile] = {
         ignore=("published date pkt", "word count", "is market wide", "content hash", "company count", "cleaned word count",
                 "text quality", "short or ambiguous title", "classification reason", "classification confidence",
                 "include primary sentiment", "needs manual review", "title date duplicate", "published at utc normalized",
-                "published date pkt normalized")),
+                "published date pkt normalized", "sentiment score", "sentiment impact", "sentiment signals",
+                "company", "period ended")),
     "generic": ImportProfile(
         name="generic", description="Auto-detects common column names; run --inspect first and override with --map.",
         columns=GENERIC_COLUMNS),

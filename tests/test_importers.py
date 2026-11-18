@@ -1,7 +1,43 @@
-import pytest
-from marketsense.db.models import NewsArticle
-import csv, pandas as pd
+"""CSV and Parquet news imports, provenance, and CLI behavior."""
+import csv
 from contextlib import contextmanager
+
+import pandas as pd
+import pytest
+from sqlalchemy import func, select
+
+from marketsense.collectors.news_collector import BusinessRecorderCollector, DawnBusinessCollector
+from marketsense.collectors.news_store import build_stock_index, store_news
+from marketsense.db.models import ImportBatch, NewsArticle, NewsArticleStock, SentimentFeature
+from marketsense.importers import pipeline
+from marketsense.importers.pipeline import import_file, inspect_file, resolve_columns
+from marketsense.importers.profiles import PROFILES
+from marketsense.importers.reader import ImportSchemaError, read_table
+from scripts import import_news as cli
+from tests.conftest import utc
+
+NOW = utc(2026, 10, 12)
+D = "https://example.test/"
+HEADER = [
+    "companies", "title", "published_at", "url", "article_id", "clean_text",
+    "sentiment_score", "sentiment_impact", "sentiment_signals", "company", "period_ended",
+]
+ROWS = [
+    ["LUCK", "Lucky Cement posts results", "2026-02-06T09:00:00+05:00",
+     D + "document/269200.pdf", "269200", "Some body text", ".9", "high", "positive", "Lucky Cement", "2025-12-31"],
+    *[
+        [symbol, title, "2026-02-08", D + f"document/{record_id}.pdf", str(record_id), "", "", "", "", "", ""]
+        for record_id, symbol, title in [
+            (269201, "HBL", "HBL raises dividend"),
+            (269202, "OGDC", ""),
+            (269203, "ENGRO", "Engro publishes results"),
+            (269204, "OGDC", "OGDC reports production"),
+            (269205, "HBL", "HBL publishes statement"),
+            (269206, "LUCK", "Lucky Cement announces expansion"),
+            (269207, "", "PSX market review"),
+        ]
+    ],
+]
 
 @pytest.fixture()
 def hf_csv(tmp_path):
@@ -19,6 +55,8 @@ def hf_parquet(tmp_path):
 
 
 def run(s, path, profile="psx_news_primary_candidates", **kw):
+    if profile == "psx_news_primary_candidates":
+        kw.setdefault("source_name", "psx_test")
     return import_file(s, path, PROFILES[profile], now=NOW, index=build_stock_index(s, aliases={}), **kw)
 
 
@@ -99,6 +137,7 @@ def test_failure_marks_batch_failed(news_session, hf_csv, monkeypatch):
 
 
 # ------------------------------------------------------------------------------------------ company mapping on import
+@pytest.fixture()
 def kaggle_like(tmp_path):
     p = tmp_path / "news.csv"
     with open(p, "w", newline="", encoding="utf-8") as fh:
@@ -194,3 +233,27 @@ def test_inspect_does_not_cry_wolf_when_timestamps_carry_offsets(tmp_path):
     p.write_text("title,published_at,url\nA,2026-03-02T09:15:00+05:00,https://x.com/1\nB,2026-03-03T10:00:00.123456+05:00,https://x.com/2\n", encoding="utf-8")
     info = inspect_file(p, PROFILES["generic"])
     assert info["warning"] is None and info["precision_sample"] == {"exact": 2}
+
+
+@pytest.mark.parametrize("collector_cls,host", [
+    (DawnBusinessCollector, "www.dawn.com"),
+    (BusinessRecorderCollector, "www.brecorder.com"),
+])
+def test_csv_slug_and_rss_guid_share_one_article(news_session, tmp_path, collector_cls, host):
+    stable_url = f"https://{host}/news/1526991"
+    slug = f"http://{host.removeprefix('www.')}/news/1526991/csv-headline?utm_source=archive"
+    rss = f"""<rss version="2.0"><channel><title>Market</title>
+        <item><title>KSE-100 gains as investors cheer rate outlook</title>
+        <link>{stable_url}/rss-headline</link><guid>{stable_url}</guid>
+        <pubDate>Mon, 02 Mar 2026 09:15:00 +0500</pubDate></item></channel></rss>"""
+    collector = collector_cls(now=lambda: NOW)
+    item, = collector.parse(rss.encode())
+    assert item.url == stable_url
+
+    path = tmp_path / "archive.csv"
+    path.write_text(f"title,published_at,url\nKSE-100 gains,2026-03-02T09:15:00+05:00,{slug}\n", encoding="utf-8")
+    report = run(news_session, path, profile="generic", source_name=collector.name)
+    assert report.store["inserted"] == 1
+    assert news_session.scalars(select(NewsArticle.url)).one() == stable_url
+    repeat = store_news(news_session, [item])
+    assert (repeat.inserted, repeat.duplicates, n(news_session)) == (0, 1, 1)

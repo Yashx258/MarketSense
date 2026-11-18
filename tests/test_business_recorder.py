@@ -29,9 +29,10 @@ def br(http=None, **kw):
 
 def test_feed_identity_is_the_verified_first_party_url():
     assert BusinessRecorderCollector.feed_url == "https://www.brecorder.com/feeds/latest-news"
-    assert BusinessRecorderCollector.name == "business_recorder" and BusinessRecorderCollector.implemented
+    assert BusinessRecorderCollector.name == "business_recorder" and BusinessRecorderCollector.enabled
 
 
+@pytest.mark.usefixtures("include_all_feed_items")
 def test_parse_counts_timestamps_and_stable_urls(br_xml):
     c = br()
     items = c.parse(br_xml)
@@ -44,6 +45,7 @@ def test_parse_counts_timestamps_and_stable_urls(br_xml):
     assert all(i.source == "business_recorder" and i.doc_type == "news" and i.language == "en" for i in items)
 
 
+@pytest.mark.usefixtures("include_all_feed_items")
 def test_wire_copy_body_is_never_stored_even_when_bodies_are_enabled(br_xml):
     c = br(store_article_text=True)
     by = {i.headline: i for i in c.parse(br_xml)}
@@ -53,10 +55,12 @@ def test_wire_copy_body_is_never_stored_even_when_bodies_are_enabled(br_xml):
     assert c.stats["body_withheld"] == 2
 
 
+@pytest.mark.usefixtures("include_all_feed_items")
 def test_bodies_are_off_by_default(br_xml):
     assert all(i.article_text is None for i in br(store_article_text=False).parse(br_xml))
 
 
+@pytest.mark.usefixtures("include_all_feed_items")
 def test_fetch_checks_robots_then_downloads(br_xml):
     http = FakeHttp({ROBOTS: Resp(404), FEED: Resp(200, br_xml)})
     assert len(br(http).fetch()) == 6
@@ -82,7 +86,19 @@ def test_since_filter_keeps_newer_only(br_xml):
     assert {i.headline for i in items} >= {"KSE-100 gains as investors cheer rate outlook"} and len(items) == 2
 
 
+def test_real_relevance_gate_keeps_only_high_confidence_articles(br_xml):
+    c = br()
+    items = c.parse(br_xml)
+    assert {item.headline for item in items} == {
+        "KSE-100 gains as investors cheer rate outlook",
+        "KSE-100 gains as investors cheer rate outlook (updated)",
+    }
+    assert c.stats["parsed"] == 6 and c.stats["relevant"] == 2
+    assert c.stats["review"] + c.stats["rejected_irrelevant"] == 4
+
+
 # ------------------------------------------------------------------------------------------ storage + company mapping
+@pytest.mark.usefixtures("include_all_feed_items")
 def test_store_maps_alias_tickers_and_leaves_market_news_unlinked(news_session, br_xml):
     s = news_session
     items = br().parse(br_xml)
@@ -99,6 +115,7 @@ def test_store_maps_alias_tickers_and_leaves_market_news_unlinked(news_session, 
     assert as_utc(first.published_at) == utc(2026, 10, 11, 5, 0) and first.headline == "KSE-100 gains as investors cheer rate outlook"   # EARLIEST kept
 
 
+@pytest.mark.usefixtures("include_all_feed_items")
 def test_rerun_is_idempotent(news_session, br_xml):
     s = news_session
     idx = build_stock_index(s, aliases={})

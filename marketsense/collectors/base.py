@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from urllib import robotparser
 from urllib.parse import urlparse
 
@@ -60,6 +60,7 @@ class NewsItem:
     time_precision: str | None = None
     doc_type: str | None = None
     source_record_id: str | None = None
+    published_date: date | None = None
 
 class NewsCollector(ABC):
     """Implement `fetch()` for one source. Prefer official RSS/APIs; check ToS + robots.txt first."""

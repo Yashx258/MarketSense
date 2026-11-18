@@ -19,13 +19,12 @@ import time
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
-from urllib.parse import urlsplit
 
 import feedparser
 import requests
 
 from marketsense.collectors.base import NewsCollector, NewsFetchBlocked, NewsFetchError, NewsItem, robots_allows
-from marketsense.collectors.news_store import normalize_url, store_news  # noqa: F401  (store_news re-exported)
+from marketsense.collectors.news_store import normalize_url, publisher_article_url, store_news  # noqa: F401  (store_news re-exported)
 from marketsense.collectors.news_relevance import classify_news
 from marketsense.config import Settings
 
@@ -81,6 +80,7 @@ class RssNewsCollector(NewsCollector):
     name: str = ""
     feed_url: str = ""
     language: str = "en"
+    publisher_host: str | None = None
     max_attempts: int = 3
 
     def __init__(self, settings: Settings | None = None, http=None, sleep=time.sleep, now=None,
@@ -126,7 +126,17 @@ class RssNewsCollector(NewsCollector):
 
     # ---- hooks a source may override
     def canonical_url(self, entry) -> str | None:
-        return entry.get("link") or None
+        link = entry.get("link")
+        if self.publisher_host:
+            return (
+                publisher_article_url(entry.get("id"), self.publisher_host)
+                or publisher_article_url(link, self.publisher_host)
+                or normalize_url(link)
+            )
+        return link or None
+
+    def allow_article_text(self, entry) -> bool:
+        return True
 
     def is_relevant(self, headline: str, summary: str) -> bool:
         """Compatibility hook: only strong `include` decisions pass the storage gate."""
@@ -163,7 +173,7 @@ class RssNewsCollector(NewsCollector):
             raise NewsFetchError(f"could not parse feed ({feed.get('bozo_exception') or 'response is not an RSS/Atom feed'})")
         self.stats = dict(entries=0, items=0, parsed=0, relevant=0, review=0, rejected_irrelevant=0,
                           no_title=0, no_timestamp=0, future_dated=0, older_than_since=0,
-                          with_body=0, link_only_body=0, review_examples=[], rejected_examples=[])
+                          with_body=0, link_only_body=0, body_withheld=0, review_examples=[], rejected_examples=[])
         lang = (feed.feed.get("language") or self.language).replace("_", "-").split("-")[0].lower()[:10] or self.language
         items: list[NewsItem] = []
         for e in feed.entries:                      # NB: feeds are NOT sorted by date; never stop at the first old item
@@ -200,9 +210,13 @@ class RssNewsCollector(NewsCollector):
                 self.stats["rejected_examples"].append((headline, decision.reason, decision.topic))
                 continue
             self.stats["relevant"] += 1
+            store_body = bool(body and self.store_article_text)
+            if store_body and not self.allow_article_text(e):
+                self.stats["body_withheld"] += 1
+                store_body = False
             items.append(NewsItem(headline=headline, source=self.name, url=self.canonical_url(e),
-                                  article_text=body if (body and self.store_article_text) else None,
-                                  published_at=published, language=lang))
+                                  article_text=body if store_body else None,
+                                  published_at=published, language=lang, doc_type="news"))
         self.stats["items"] = len(items)
         items.sort(key=lambda i: (i.published_at is None, -(i.published_at.timestamp() if i.published_at else 0)))
         return items
@@ -220,21 +234,20 @@ class DawnBusinessCollector(RssNewsCollector):
     """
     name = "dawn_business"
     feed_url = "https://www.dawn.com/feeds/business"
+    publisher_host = "www.dawn.com"
     enabled = True
-
-    def canonical_url(self, entry) -> str | None:
-        # the id URL survives headline edits (the slug in <link> may change), so it is the better dedup key
-        guid = normalize_url(entry.get("id") or "")
-        if guid and urlsplit(guid).hostname in ("www.dawn.com", "dawn.com") and "/news/" in guid:
-            return guid
-        return entry.get("link") or None
 
 
 class BusinessRecorderCollector(RssNewsCollector):
     """Business Recorder latest-news RSS, filtered by the shared MarketSense relevance gate."""
     name = "business_recorder"
     feed_url = "https://www.brecorder.com/feeds/latest-news"
+    publisher_host = "www.brecorder.com"
     enabled = True
+
+    def allow_article_text(self, entry) -> bool:
+        byline = (entry.get("author_detail") or {}).get("name") or entry.get("author") or ""
+        return not re.search(r"\b(?:Reuters|AFP|Associated Press|AP)\b", byline, re.IGNORECASE)
 
 
 class ProfitPakistanTodayCollector(RssNewsCollector):
