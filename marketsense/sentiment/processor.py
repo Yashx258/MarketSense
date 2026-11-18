@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from marketsense.db.connection import dialect_insert
 from marketsense.db.models import NewsArticle, SentimentFeature
+from marketsense.sentiment.text_hygiene import clean_article_text
 
 log = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ class FinBertBackend:
 def build_text(headline: str | None, article_text: str | None) -> str:
     """Headline alone unless a body was stored (bodies are opt-in). Long text is truncated by the tokenizer."""
     head = " ".join((headline or "").split())
-    body = " ".join((article_text or "").split())
+    body = " ".join(clean_article_text(article_text or "").split())
     return f"{head}. {body}" if head and body else (head or body)
 
 

@@ -5,7 +5,7 @@ import types
 from contextlib import contextmanager
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 import scripts.score_sentiment as cli
@@ -66,6 +66,27 @@ def test_text_is_headline_plus_body_only_when_body_exists(news_session):
     SentimentProcessor(be, batch_size=10).process_pending(news_session)
     assert be.batches == [["Cement profit. Despatches rose.", "Bank loss"]]
     assert build_text("  A  b ", None) == "A b" and build_text(None, "body") == "body" and build_text("", "") == ""
+
+
+def test_pending_scoring_cleans_body_without_updating_stored_article(news_session):
+    # Some deployments may have a hash column outside the ORM schema.
+    news_session.execute(text("ALTER TABLE news_articles ADD COLUMN content_hash VARCHAR(64)"))
+    raw_body = "Despatches rose.\r\n\r\nThe writer is an economist. [email protected]"
+    article_id = add(news_session, "Cement profit", text=raw_body)
+    original_hash = "a" * 64
+    news_session.execute(
+        text("UPDATE news_articles SET content_hash = :hash WHERE news_id = :id"),
+        {"hash": original_hash, "id": article_id},
+    )
+    news_session.commit()
+
+    backend = FakeBackend()
+    assert SentimentProcessor(backend).process_pending(news_session).scored == 1
+    assert backend.batches == [["Cement profit. Despatches rose."]]
+    assert news_session.execute(
+        text("SELECT article_text, content_hash FROM news_articles WHERE news_id = :id"),
+        {"id": article_id},
+    ).one() == (raw_body, original_hash)
 
 
 def test_rerun_is_a_no_op_and_new_articles_are_picked_up(news_session):

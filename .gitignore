@@ -25,3 +25,6 @@ backup_*.sql
 
 *.sql.bak
 backup_*.sql
+
+data/extended_news/*.csv
+backup_*.sql
