@@ -67,8 +67,15 @@ class NewsArticle(Base):
     import_batch_id: Mapped[int | None] = mapped_column(
         ForeignKey("import_batches.batch_id", ondelete="SET NULL")
     )
-    __table_args__ = (Index("uq_news_url", "url", unique=True,
-                            postgresql_where=text("url IS NOT NULL"), sqlite_where=text("url IS NOT NULL")),)
+    relevance_status: Mapped[str] = mapped_column(String(10), server_default="review", nullable=False)
+    relevance_topic: Mapped[str] = mapped_column(String(60), server_default="unclassified", nullable=False)
+    relevance_reason: Mapped[str] = mapped_column(Text, server_default="Awaiting relevance annotation", nullable=False)
+    relevance_version: Mapped[str] = mapped_column(String(30), server_default="unclassified", nullable=False)
+    __table_args__ = (
+        Index("uq_news_url", "url", unique=True,
+              postgresql_where=text("url IS NOT NULL"), sqlite_where=text("url IS NOT NULL")),
+        CheckConstraint("relevance_status IN ('include', 'review', 'reject')", name="ck_news_relevance_status"),
+    )
 
 
 class NewsArticleStock(Base):

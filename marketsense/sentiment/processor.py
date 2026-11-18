@@ -129,7 +129,7 @@ class SentimentProcessor:
             n = self.batch_size if remaining is None else min(self.batch_size, remaining)
             rows = session.execute(
                 select(NewsArticle.news_id, NewsArticle.stock_id, NewsArticle.headline, NewsArticle.article_text)
-                .where(NewsArticle.news_id > last_id,
+                .where(NewsArticle.news_id > last_id, NewsArticle.relevance_status == "include",
                        ~exists().where(and_(SentimentFeature.news_id == NewsArticle.news_id,
                                             SentimentFeature.model_name == self.model_name)))
                 .order_by(NewsArticle.news_id).limit(n)).all()

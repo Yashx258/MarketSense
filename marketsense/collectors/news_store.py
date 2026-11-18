@@ -27,6 +27,7 @@ from pathlib import Path
 from collections.abc import Mapping
 
 from marketsense.collectors.base import NewsItem
+from marketsense.collectors.news_relevance import RelevanceDecision, classify_news
 from marketsense.db.connection import dialect_insert
 from marketsense.db.models import NewsArticle, NewsArticleStock, Stock
 
@@ -71,6 +72,8 @@ AMBIGUOUS_TICKER_TOKENS = frozenset({
     "POL",  # petroleum / petroleum products
     "NPL",  # non-performing loans
 })
+RELEVANCE_AMBIGUOUS_TOKENS = AMBIGUOUS_TICKER_TOKENS | {"ILP", "PTC", "HMB"}
+DEFAULT_ALIASES = Path(__file__).resolve().parents[2] / "config" / "company_aliases.csv"
 
 # ------------------------------------------------------------------------------------------ URL normalisation
 
@@ -161,7 +164,9 @@ def build_stock_index(
     )
 
     # Resolve aliases only when their destination symbol exists.
-    for alias, symbol in (aliases or {}).items():
+    if aliases is None:
+        aliases = load_aliases(DEFAULT_ALIASES)
+    for alias, symbol in aliases.items():
         alias = (alias or "").strip().upper()
         symbol = (symbol or "").strip().upper()
 
@@ -198,7 +203,8 @@ def load_aliases(path: str | Path) -> dict[str, str]:
 
     return aliases
 
-def match_stocks(text_: str, index: StockIndex) -> dict[int, str]:
+def match_stocks(text_: str, index: StockIndex, *,
+                 ambiguous_tokens: frozenset[str] = AMBIGUOUS_TICKER_TOKENS) -> dict[int, str]:
     """Return {stock_id: matching_method} using conservative evidence.
 
     Methods:
@@ -212,18 +218,14 @@ def match_stocks(text_: str, index: StockIndex) -> dict[int, str]:
     text_ = text_ or ""
 
     # 1. Direct uppercase stock symbols.
-    for token in _SYMBOL_TOKEN.findall(text_):
+    tokens = set(_SYMBOL_TOKEN.findall(text_)) - GENERIC_ACRONYMS - ambiguous_tokens
+    for token in tokens:
         stock_id = index.by_symbol.get(token)
-
-        if (
-            stock_id is not None
-            and token not in GENERIC_ACRONYMS
-            and token not in AMBIGUOUS_TICKER_TOKENS
-        ):
+        if stock_id is not None:
             found[stock_id] = "symbol"
 
     # 2. Explicitly configured aliases.
-    for token in _SYMBOL_TOKEN.findall(text_):
+    for token in tokens:
         stock_id = index.alias_symbols.get(token)
 
         if stock_id is not None:
@@ -232,11 +234,41 @@ def match_stocks(text_: str, index: StockIndex) -> dict[int, str]:
     # 3. Company-name matches.
     padded = f" {_norm(text_)} "
 
+    for alias, stock_id in index.alias_symbols.items():
+        if " " in alias and f" {_norm(alias)} " in padded:
+            found.setdefault(stock_id, "alias")
+
     for stem, stock_id in index.names:
         if stock_id not in found and f" {stem} " in padded:
             found[stock_id] = "name"
 
     return found
+
+
+def annotate_news(item: NewsItem, index: StockIndex) -> RelevanceDecision:
+    """Use the headline, source categories, and current stock identities."""
+    has_company = bool(match_stocks(item.headline, index, ambiguous_tokens=RELEVANCE_AMBIGUOUS_TOKENS))
+    categories = item.categories or ((item.category,) if item.category else ())
+    return classify_news(item.headline, categories=categories, has_company=has_company)
+
+
+def backfill_relevance(session: Session) -> int:
+    """Annotate legacy rows in bounded batches within the caller's transaction."""
+    total = 0
+    last_id = 0
+    pending = select(NewsArticle).where(NewsArticle.relevance_version == "unclassified")
+    index = build_stock_index(session)
+    while batch := session.scalars(
+        pending.where(NewsArticle.news_id > last_id).order_by(NewsArticle.news_id).limit(1000)
+    ).all():
+        for article in batch:
+            item = NewsItem(article.headline, article.source, category=article.category)
+            for field, value in annotate_news(item, index).article_fields().items():
+                setattr(article, field, value)
+        session.flush()
+        last_id = batch[-1].news_id
+        total += len(batch)
+    return total
 
 
 # ------------------------------------------------------------------------------------------ storing
@@ -251,6 +283,7 @@ class StoreReport:
     articles_with_stocks: int = 0
     stock_links: int = 0
     unknown_symbols: dict[str, int] = field(default_factory=dict)   # explicit source tickers not in `stocks`
+    relevance_counts: dict[str, int] = field(default_factory=dict)
 
     def summary(self) -> str:
         lines = [f"received={self.received} inserted={self.inserted} duplicates={self.duplicates} "
@@ -259,6 +292,10 @@ class StoreReport:
                  f"stored_without_timestamp={self.stored_without_timestamp}"]
         if self.unknown_symbols:
             lines.append("unknown source tickers (not in stocks): " + ", ".join(f"{k}x{v}" for k, v in sorted(self.unknown_symbols.items())))
+        if self.relevance_counts:
+            lines.append("inserted relevance: " + " ".join(
+                f"{status}={self.relevance_counts.get(status, 0)}" for status in ("include", "review", "reject")
+            ))
         return "\n".join(lines)
 
     def merge(self, o: "StoreReport") -> None:
@@ -276,6 +313,8 @@ class StoreReport:
 
         for k, v in o.unknown_symbols.items():
             self.unknown_symbols[k] = self.unknown_symbols.get(k, 0) + v
+        for status, count in o.relevance_counts.items():
+            self.relevance_counts[status] = self.relevance_counts.get(status, 0) + count
 
 
 def _to_utc(dt: datetime | None) -> datetime | None:
@@ -343,6 +382,7 @@ def store_news(session: Session, items: list[NewsItem], index: StockIndex | None
         for sid, how in match_stocks(f"{headline}. {it.article_text or ''}", index).items():
             stocks.setdefault(sid, how)
 
+        relevance = annotate_news(it, index)
         row = dict(
             stock_id=next(iter(stocks)) if len(stocks) == 1 else None,
             headline=headline,
@@ -357,12 +397,14 @@ def store_news(session: Session, items: list[NewsItem], index: StockIndex | None
             doc_type=getattr(it, "doc_type", None) or "news",
             source_record_id=it.source_record_id,
             import_batch_id=batch_id,
+            **relevance.article_fields(),
         )
         news_id = _insert_article(session, row)
         if news_id is None:
             rep.duplicates += 1
             continue
         rep.inserted += 1
+        rep.relevance_counts[relevance.status] = rep.relevance_counts.get(relevance.status, 0) + 1
         rep.stored_without_timestamp += published is None
         if stocks:
             session.execute(dialect_insert(session)(NewsArticleStock).values(

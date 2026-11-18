@@ -109,6 +109,9 @@ def test_fresh_init_matches_upgrade_with_existing_data(eng, monkeypatch):
             }
 
         assert signature(fresh) == signature(eng)
+        assert q(eng, "SELECT relevance_status, relevance_version FROM news_articles ORDER BY news_id") == [
+            ("reject", "psx-rules-v1"), ("reject", "psx-rules-v1"),
+        ]
         for table, rows in before.items():
             assert q(eng, f"SELECT * FROM {table} ORDER BY 1") == rows
         assert q(eng, "SELECT headline, time_precision, published_date::text FROM news_articles ORDER BY news_id") == [
@@ -119,3 +122,22 @@ def test_fresh_init_matches_upgrade_with_existing_data(eng, monkeypatch):
         fresh.dispose()
         with eng.begin() as conn:
             conn.exec_driver_sql("DROP SCHEMA fresh_init CASCADE")
+
+
+def test_migration_003_backfills_review_and_preserves_annotations(eng):
+    migration = (ROOT / "sql/migrations/003_news_relevance.sql").read_text()
+    with eng.begin() as conn:
+        conn.exec_driver_sql(MIG)
+        conn.exec_driver_sql(migration)
+    assert q(eng, "SELECT relevance_status, relevance_version FROM news_articles ORDER BY news_id") == [
+        ("review", "unclassified"), ("review", "unclassified"),
+    ]
+    with pytest.raises(IntegrityError):
+        with eng.begin() as conn:
+            conn.exec_driver_sql("UPDATE news_articles SET relevance_status = 'unknown' WHERE news_id = 1")
+    with eng.begin() as conn:
+        conn.exec_driver_sql("UPDATE news_articles SET relevance_status = 'include', relevance_version = 'manual' WHERE news_id = 1")
+        conn.exec_driver_sql(migration)
+    assert q(eng, "SELECT relevance_status, relevance_version FROM news_articles ORDER BY news_id") == [
+        ("include", "manual"), ("review", "unclassified"),
+    ]

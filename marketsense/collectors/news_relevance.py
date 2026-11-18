@@ -1,19 +1,11 @@
-"""Conservative relevance gate for MarketSense PSX/KSE-100 news.
-
-The filter is deliberately separate from sentiment. It classifies each headline into:
-- include: strong, explicit connection to PSX, a Pakistan macro market driver, or a
-  named PSX-listed company plus a material corporate event;
-- review: potentially useful but the headline alone does not establish a direct market link;
-- reject: clearly unrelated/noise.
-
-Only `include` items are passed to the existing NewsItem/storage pipeline. `review` items
-are reported by the dry-run CLI but are NOT written to PostgreSQL. This is a transparent
-rule-based gate, not a semantic model or a guarantee of relevance.
-"""
+"""Versioned rules for annotating the relevance of MarketSense news."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+
+
+RELEVANCE_VERSION = "psx-rules-v1"
 
 
 @dataclass(frozen=True)
@@ -22,7 +14,15 @@ class RelevanceDecision:
     reason: str
     topic: str
     content_type: str = "news"
+    version: str = RELEVANCE_VERSION
 
+    def article_fields(self) -> dict[str, str]:
+        return {
+            "relevance_status": self.status,
+            "relevance_topic": self.topic,
+            "relevance_reason": self.reason,
+            "relevance_version": self.version,
+        }
 
 # A hard reject is applied only to clearly unrelated headline types. Do not add broad words
 # such as "Pakistan", "business", "market", or "economy" here.
@@ -94,21 +94,6 @@ _REVIEW_POLICY = re.compile(
     re.IGNORECASE,
 )
 
-_LISTED_COMPANIES = re.compile(
-    r"\b(?:gul ahmed|gul ahmed textile|interloop|nishat mills|nishat chunian|"
-    r"lucky cement|lucky motors|engro|engro holdings|hubco|hub power|ogdc|"
-    r"oil and gas development company|pakistan petroleum|\bppl\b|mari petroleum|"
-    r"attock refinery|\batrl\b|\bpso\b|pakistan state oil|\bhbl\b|habib bank|"
-    r"\bubl\b|united bank|\bmcb\b|mcb bank|meezan bank|bank al habib|bank alfalah|"
-    r"fauji fertilizer|\bffc\b|fatima fertilizer|systems limited|\bsys\b|"
-    r"k[- ]electric|sui northern|sui southern|\bptcl\b|pakistan telecom|"
-    r"indus motor|pak suzuki|millat tractors|cherat cement|maple leaf cement|"
-    r"colgate palmolive pakistan|nestle pakistan|attock petroleum|pakistan cables|"
-    r"air link communication|airlink|trg pakistan|\btrg\b|\bmtl\b|medical transcript|"
-    r"national bank of pakistan|\bnbp\b|bank of punjab|\bbop\b)\b",
-    re.IGNORECASE,
-)
-
 _COMPANY_EVENT = re.compile(
     r"\b(?:acquisition|acquires?|acquired|merger|merges?|divestment|divests?|"
     r"financial results|corporate results|quarterly results|annual results|earnings|"
@@ -116,19 +101,19 @@ _COMPANY_EVENT = re.compile(
     r"board approves?|shareholders approve?|capacity expansion|plant shutdown|"
     r"production halt|default|debt restructuring|contract worth|investment of|"
     r"capital expenditure|raises? funds|rights issue|revenue rises?|revenue falls?|"
-    r"appoints? .*? ceo|ceo appointed|material agreement|power purchase agreement)\b",
+    r"appoints? .*? ceo|ceo appointed|appoints? .{0,40}chief executive|posts? (?:a |an )?(?:(?:quarterly|annual|net) )?profit|material agreement|power purchase agreement)\b",
     re.IGNORECASE,
 )
 
 _EDITORIAL = re.compile(r"^\s*(?:editorial|opinion|analysis|commentary)\s*[:—-]", re.IGNORECASE)
 
 
-def classify_news(headline: str, summary: str = "", categories: tuple[str, ...] | list[str] = ()) -> RelevanceDecision:
+def classify_news(headline: str, summary: str = "", categories: tuple[str, ...] | list[str] = (), *, has_company: bool = False) -> RelevanceDecision:
     """Return a conservative decision using the headline as the primary evidence.
 
     The summary parameter is retained for collector compatibility but is deliberately not
     used to promote a headline: RSS summaries can contain boilerplate or unrelated page text.
-    Category metadata is used only to identify opinion/editorial content for manual review.
+    Category metadata identifies opinion/editorial content. Company evidence comes from the stock index.
     """
     title = " ".join((headline or "").split()).strip()
     if not title:
@@ -143,7 +128,7 @@ def classify_news(headline: str, summary: str = "", categories: tuple[str, ...] 
     if _FOREIGN_ONLY.search(title) and not _PAKISTAN_CONTEXT.search(title) and not _DIRECT_PSX.search(title):
         return RelevanceDecision("reject", "foreign-market story without Pakistan-market link", "foreign_market")
 
-    if _GENERIC_BILATERAL.search(title) and not _DIRECT_PSX.search(title) and not _LISTED_COMPANIES.search(title):
+    if _GENERIC_BILATERAL.search(title) and not _DIRECT_PSX.search(title) and not has_company:
         return RelevanceDecision("reject", "generic diplomatic/trade announcement without material market evidence", "bilateral_announcement")
 
     if _DIRECT_PSX.search(title):
@@ -156,7 +141,7 @@ def classify_news(headline: str, summary: str = "", categories: tuple[str, ...] 
             return RelevanceDecision("review", "editorial on monetary policy", "monetary_policy", "editorial")
         return RelevanceDecision("include", "explicit SBP/MPC monetary-policy signal", "monetary_policy")
 
-    if _LISTED_COMPANIES.search(title) and _COMPANY_EVENT.search(title):
+    if has_company and _COMPANY_EVENT.search(title):
         if editorial:
             return RelevanceDecision("review", "company-related editorial; verify factual event", "corporate", "editorial")
         return RelevanceDecision("include", "named PSX-listed company and material corporate event", "corporate")

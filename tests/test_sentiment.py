@@ -30,7 +30,7 @@ class FakeBackend:
 
 
 def add(session, headline, text=None, stock_id=None):
-    a = NewsArticle(headline=headline, article_text=text, source="t", stock_id=stock_id)
+    a = NewsArticle(headline=headline, article_text=text, source="t", relevance_status="include", stock_id=stock_id)
     session.add(a); session.flush()
     return a.news_id
 

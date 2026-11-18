@@ -18,7 +18,7 @@ def sid(s, sym):
 
 
 def article(s, headline, published, symbols=(), retrieved=None, model="ProsusAI/finbert", scored=True, label="positive"):
-    a = NewsArticle(headline=headline, source="t", published_at=published, retrieved_at=retrieved or utc(2026, 10, 1),
+    a = NewsArticle(headline=headline, source="t", relevance_status="include", published_at=published, retrieved_at=retrieved or utc(2026, 10, 1),
                     stock_id=sid(s, symbols[0]) if len(symbols) == 1 else None)
     s.add(a); s.flush()
     for sym in symbols:

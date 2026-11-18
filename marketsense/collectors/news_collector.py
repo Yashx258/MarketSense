@@ -1,8 +1,8 @@
 """News collectors.
 
 IMPLEMENTED RSS collectors (review source terms before persistent collection):
-    dawn_business          https://www.dawn.com/feeds/business (shared PSX relevance filter)
-    business_recorder      https://www.brecorder.com/feeds/latest-news (shared PSX relevance filter)
+    dawn_business          https://www.dawn.com/feeds/business
+    business_recorder      https://www.brecorder.com/feeds/latest-news
 
 DISABLED:
     profit_pakistan_today  configured Opinion feed returned HTTP 404; do not retry until a valid
@@ -25,7 +25,6 @@ import requests
 
 from marketsense.collectors.base import NewsCollector, NewsFetchBlocked, NewsFetchError, NewsItem, robots_allows
 from marketsense.collectors.news_store import normalize_url, publisher_article_url, store_news  # noqa: F401  (store_news re-exported)
-from marketsense.collectors.news_relevance import classify_news
 from marketsense.config import Settings
 
 log = logging.getLogger(__name__)
@@ -138,10 +137,6 @@ class RssNewsCollector(NewsCollector):
     def allow_article_text(self, entry) -> bool:
         return True
 
-    def is_relevant(self, headline: str, summary: str) -> bool:
-        """Compatibility hook: only strong `include` decisions pass the storage gate."""
-        return classify_news(headline, summary).status == "include"
-
     # ---- parsing (pure: no network, used directly by tests)
     def _published(self, entry) -> datetime | None:
         """Aware UTC datetime, or None. Never guesses a zone for naive strings; rejects future-dated items."""
@@ -171,9 +166,9 @@ class RssNewsCollector(NewsCollector):
         # version check it would be reported as a successful (empty) run. A genuine empty feed has version 'rss20' etc.
         if not feed.entries and (feed.get("bozo") or not feed.get("version")):
             raise NewsFetchError(f"could not parse feed ({feed.get('bozo_exception') or 'response is not an RSS/Atom feed'})")
-        self.stats = dict(entries=0, items=0, parsed=0, relevant=0, review=0, rejected_irrelevant=0,
+        self.stats = dict(entries=0, items=0, parsed=0,
                           no_title=0, no_timestamp=0, future_dated=0, older_than_since=0,
-                          with_body=0, link_only_body=0, body_withheld=0, review_examples=[], rejected_examples=[])
+                          with_body=0, link_only_body=0, body_withheld=0)
         lang = (feed.feed.get("language") or self.language).replace("_", "-").split("-")[0].lower()[:10] or self.language
         items: list[NewsItem] = []
         for e in feed.entries:                      # NB: feeds are NOT sorted by date; never stop at the first old item
@@ -200,23 +195,13 @@ class RssNewsCollector(NewsCollector):
                 for tag in (e.get("tags") or [])
                 if isinstance(tag, dict)
             )
-            decision = classify_news(headline, body, categories)
-            if decision.status == "review":
-                self.stats["review"] += 1
-                self.stats["review_examples"].append((headline, decision.reason, decision.topic))
-                continue
-            if decision.status != "include":
-                self.stats["rejected_irrelevant"] += 1
-                self.stats["rejected_examples"].append((headline, decision.reason, decision.topic))
-                continue
-            self.stats["relevant"] += 1
             store_body = bool(body and self.store_article_text)
             if store_body and not self.allow_article_text(e):
                 self.stats["body_withheld"] += 1
                 store_body = False
             items.append(NewsItem(headline=headline, source=self.name, url=self.canonical_url(e),
                                   article_text=body if store_body else None,
-                                  published_at=published, language=lang, doc_type="news"))
+                                  published_at=published, language=lang, doc_type="news", categories=categories))
         self.stats["items"] = len(items)
         items.sort(key=lambda i: (i.published_at is None, -(i.published_at.timestamp() if i.published_at else 0)))
         return items
@@ -239,7 +224,7 @@ class DawnBusinessCollector(RssNewsCollector):
 
 
 class BusinessRecorderCollector(RssNewsCollector):
-    """Business Recorder latest-news RSS, filtered by the shared MarketSense relevance gate."""
+    """Business Recorder latest-news RSS."""
     name = "business_recorder"
     feed_url = "https://www.brecorder.com/feeds/latest-news"
     publisher_host = "www.brecorder.com"

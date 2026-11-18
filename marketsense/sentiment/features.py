@@ -115,7 +115,7 @@ def _available_articles(cutoff, lookback, strict_retrieval, stock_ids, include_m
             NewsArticle.retrieved_at.label("retrieved_at"),
         )
         .outerjoin(NewsArticleStock, NewsArticleStock.news_id == NewsArticle.news_id)
-        .where(available)
+        .where(available, NewsArticle.relevance_status == "include")
     )
 
     stock_id = NewsArticleStock.stock_id

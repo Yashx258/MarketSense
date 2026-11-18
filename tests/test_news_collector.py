@@ -45,19 +45,17 @@ def collector(http=None, **kw):
 
 
 # ------------------------------------------------------------------------------------------ parsing
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_parse_fixture_counts_and_order(dawn_xml):
     c = collector(store_article_text=False)
     items = c.parse(dawn_xml)
-    assert c.stats == dict(entries=9, items=8, parsed=8, relevant=8, review=0, rejected_irrelevant=0,
+    assert c.stats == dict(entries=9, items=8, parsed=8,
                            no_title=1, no_timestamp=3, future_dated=1, older_than_since=0,
-                           with_body=7, link_only_body=1, body_withheld=0, review_examples=[], rejected_examples=[])
+                           with_body=7, link_only_body=1, body_withheld=0)
     stamped = [i.published_at for i in items if i.published_at]
     assert stamped == sorted(stamped, reverse=True)                           # newest first
     assert [i.published_at is None for i in items] == [False] * 5 + [True] * 3   # timestamp-less items last
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_timestamps_are_correct_utc_instants(dawn_xml):
     by_title = {i.headline: i for i in collector().parse(dawn_xml)}
     assert by_title["Lucky Cement lifts quarterly profit"].published_at == utc(2026, 10, 11, 2, 39, 40)   # 07:39:40 +0500
@@ -65,7 +63,6 @@ def test_timestamps_are_correct_utc_instants(dawn_xml):
     assert all(i.published_at.utcoffset() == timedelta(0) for i in by_title.values() if i.published_at)
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_bad_missing_and_future_timestamps_become_none_not_guesses(dawn_xml):
     by_title = {i.headline: i for i in collector().parse(dawn_xml)}
     assert by_title["Oil prices steady"].published_at is None            # no pubDate
@@ -73,26 +70,22 @@ def test_bad_missing_and_future_timestamps_become_none_not_guesses(dawn_xml):
     assert by_title["Budget preview from the future"].published_at is None   # 2030 > now + 10 min
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_headline_whitespace_cleaned_and_empty_title_skipped(dawn_xml):
     titles = [i.headline for i in collector().parse(dawn_xml)]
     assert "Lucky Cement lifts quarterly profit" in titles               # trailing newline removed
     assert all(t == t.strip() and t for t in titles) and len(titles) == 8
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_canonical_url_is_the_stable_guid_so_edits_dedupe(dawn_xml):
     items = collector().parse(dawn_xml)
     luck = [i for i in items if i.headline.startswith("Lucky Cement")]
     assert len(luck) == 2 and {i.url for i in luck} == {"https://www.dawn.com/news/9000001"}   # not the slug links
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_source_language_and_name(dawn_xml):
     assert {(i.source, i.language) for i in collector().parse(dawn_xml)} == {("dawn_business", "en")}
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_article_text_is_opt_in(dawn_xml):
     assert all(i.article_text is None for i in collector(store_article_text=False).parse(dawn_xml))
     items = {i.headline: i for i in collector(store_article_text=True).parse(dawn_xml)}
@@ -101,7 +94,6 @@ def test_article_text_is_opt_in(dawn_xml):
     assert items["Global growth set to slow, UN says"].article_text is None                   # link-only stub
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_default_follows_settings(dawn_xml):
     c = DawnBusinessCollector(settings=Settings(news_store_article_text=True), now=lambda: NOW)
     assert any(i.article_text for i in c.parse(dawn_xml))
@@ -109,7 +101,6 @@ def test_default_follows_settings(dawn_xml):
     assert not any(i.article_text for i in c.parse(dawn_xml))
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_since_filters_old_but_keeps_undated_and_does_not_stop_early(dawn_xml):
     c = collector()
     items = c.parse(dawn_xml, since=utc(2026, 10, 10))
@@ -135,7 +126,6 @@ def test_html_to_text():
 
 
 # ------------------------------------------------------------------------------------------ HTTP behaviour
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_fetch_happy_path_uses_ua_timeout_and_checks_robots_first(dawn_xml):
     http = FakeHttp({ROBOTS: Resp(404), FEED: Resp(200, dawn_xml)})
     items = collector(http).fetch()
@@ -153,7 +143,6 @@ def test_robots_disallow_or_unreadable_blocks_before_feed_is_requested(robots, d
     assert FEED not in [u for u, *_ in http.calls]          # never touched the feed
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_missing_robots_txt_means_allowed(dawn_xml):
     http = FakeHttp({ROBOTS: Resp(404), FEED: Resp(200, dawn_xml)})
     assert collector(http).fetch()
@@ -184,7 +173,6 @@ def test_5xx_is_retried_with_backoff_then_gives_up():
     assert [u for u, *_ in http.calls].count(FEED) == 3 and c.sleeps == [1, 2]
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_transient_failure_then_success(dawn_xml):
     http = FakeHttp({ROBOTS: Resp(404), FEED: [requests.Timeout("slow"), Resp(502), Resp(200, dawn_xml)]})
     c = collector(http)
@@ -211,7 +199,6 @@ def test_profit_is_registered_but_disabled():
     assert set(REGISTRY) == {"dawn_business", "business_recorder", "profit_pakistan_today"}
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_enabled_collector_can_use_alternate_rss_endpoint(dawn_xml):
     url = "https://example.test/feed"
     http = FakeHttp({"https://example.test/robots.txt": Resp(404), url: Resp(200, dawn_xml)})
@@ -256,7 +243,6 @@ def test_cli_refuses_disabled_profit_even_with_an_override(capsys, monkeypatch):
     assert "profit_pakistan_today is disabled" in capsys.readouterr().err
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_cli_check_needs_no_database_or_flag(feed_bytes, capsys, monkeypatch):
     monkeypatch.setattr(cli, "Settings", lambda: Settings(news_enabled=False, news_store_article_text=False))
     monkeypatch.setattr(cli, "session_scope", lambda: pytest.fail("check must not open a database session"))
@@ -266,13 +252,15 @@ def test_cli_check_needs_no_database_or_flag(feed_bytes, capsys, monkeypatch):
     assert "article bodies configured for storage: False" in out
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
-def test_cli_dry_run_writes_nothing(feed_bytes, capsys, monkeypatch):
-    monkeypatch.setattr(cli, "session_scope", lambda *a, **k: (_ for _ in ()).throw(AssertionError("DB must not be touched")))
+def test_cli_dry_run_writes_nothing(feed_bytes, news_session, capsys, monkeypatch):
+    from contextlib import nullcontext
+
+    monkeypatch.setattr(cli, "session_scope", lambda: nullcontext(news_session))
     monkeypatch.setattr(cli, "_since", lambda a: utc(2026, 10, 10))
     assert cli.main(["--source", "dawn_business", "--dry-run", "--limit", "2"]) == 0
     out = capsys.readouterr().out
-    assert "2 high-confidence relevant item(s) would be stored" in out and "Lucky Cement" in out
+    assert "2 article(s) considered for storage (nothing written)" in out and "Lucky Cement" in out
+    assert news_session.scalar(select(func.count()).select_from(NewsArticle)) == 0
 
 
 def test_cli_blocked_returns_2(monkeypatch, capsys):
@@ -288,7 +276,6 @@ def test_cli_network_error_returns_1(monkeypatch, capsys):
     assert cli.main(["--source", "dawn_business", "--dry-run"]) == 1
 
 
-@pytest.mark.usefixtures("include_all_feed_items")
 def test_cli_store_path_end_to_end(feed_bytes, news_session, monkeypatch, capsys):
     from contextlib import contextmanager
 

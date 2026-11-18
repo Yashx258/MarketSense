@@ -16,7 +16,7 @@ def sid(s, sym):
 
 
 def add(s, headline, *, published=None, pdate=None, precision="exact", doc_type="news", syms=(), retrieved=utc(2026, 10, 1), scored=False):
-    a = NewsArticle(headline=headline, source="t", published_at=published, published_date=pdate, time_precision=precision,
+    a = NewsArticle(headline=headline, source="t", relevance_status="include", published_at=published, published_date=pdate, time_precision=precision,
                     doc_type=doc_type, retrieved_at=retrieved, stock_id=sid(s, syms[0]) if len(syms) == 1 else None)
     s.add(a); s.flush()
     for y in syms:

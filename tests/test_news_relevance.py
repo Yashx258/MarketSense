@@ -1,4 +1,7 @@
+from marketsense.collectors.base import NewsItem
 from marketsense.collectors.news_relevance import classify_news
+from marketsense.collectors.news_store import annotate_news, build_stock_index
+from marketsense.db.models import Stock
 
 
 def test_direct_psx_headline_is_included():
@@ -11,9 +14,43 @@ def test_sbp_monetary_policy_is_included():
     assert d.status == "include"
 
 
-def test_listed_company_material_event_is_included():
-    d = classify_news("Textile giant Gul Ahmed approves acquisition of 43.75 acres")
+def test_listed_company_material_event_is_included(news_session):
+    item = NewsItem("Textile giant Gul Ahmed approves acquisition of 43.75 acres", "test")
+    assert annotate_news(item, build_stock_index(news_session)).status != "include"
+    news_session.add(Stock(symbol="GATM", company_name="Gul Ahmed Textile Mills Limited"))
+    news_session.flush()
+    index = build_stock_index(news_session, aliases={"Gul Ahmed": "GATM"})
+    d = annotate_news(item, index)
     assert d.status == "include"
+
+
+def test_dynamic_aliases_and_ambiguous_ticker_guards(news_session):
+    news_session.add_all([
+        Stock(symbol=symbol, company_name=name)
+        for symbol, name in [
+            ("PTC", "Pakistan Telecommunication Company Limited"),
+            ("SNGP", "Sui Northern Gas Pipelines Limited"), ("POL", "Pakistan Oilfields Limited"),
+            ("NPL", "Nishat Power Limited"), ("ILP", "Interloop Limited"), ("HMB", "Habib Metropolitan Bank Limited"),
+        ]
+    ])
+    news_session.flush()
+    index = build_stock_index(news_session)
+    for name in ("PTCL", "SNGPL", "Habib Metropolitan Bank", "Pakistan Oilfields"):
+        d = annotate_news(NewsItem(f"{name} announces dividend", "test"), index)
+        assert (d.status, d.topic) == ("include", "corporate")
+    for token in ("POL", "NPL", "ILP", "PTC", "HMB"):
+        d = annotate_news(NewsItem(f"{token} announces dividend", "test"), index)
+        assert d.status != "include"
+
+
+def test_calibration_scores_known_positives_and_negatives(news_session, tmp_path):
+    from scripts.calibrate_news_relevance import calibrate
+
+    path = tmp_path / "labels.csv"
+    path.write_text("title,label\nPSX rises,include\nPSX falls,reject\nObituary,include\nTravel costs,reject\n",
+                    encoding="utf-8")
+    counts = calibrate(path, build_stock_index(news_session), "title", "label", None)
+    assert counts == {(True, True): 1, (False, True): 1, (True, False): 1, (False, False): 1}
 
 
 def test_obituary_is_rejected():

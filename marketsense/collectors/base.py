@@ -61,6 +61,7 @@ class NewsItem:
     doc_type: str | None = None
     source_record_id: str | None = None
     published_date: date | None = None
+    categories: tuple[str, ...] = ()
 
 class NewsCollector(ABC):
     """Implement `fetch()` for one source. Prefer official RSS/APIs; check ToS + robots.txt first."""
