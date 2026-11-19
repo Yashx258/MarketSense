@@ -125,7 +125,12 @@ class SentimentFeature(Base):
     sentiment_label: Mapped[str] = mapped_column(String(10), nullable=False)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
     processed_at: Mapped[datetime] = mapped_column(TS, server_default=func.now(), nullable=False)
-    __table_args__ = (UniqueConstraint("news_id", "model_name", name="uq_sent_news_model"),)
+    text_variant: Mapped[str] = mapped_column(String(20), nullable=False, server_default="legacy_full_text")
+    __table_args__ = (
+        UniqueConstraint("news_id", "model_name", "text_variant", name="uq_sent_news_model_variant"),
+        CheckConstraint("text_variant IN ('legacy_full_text', 'headline', 'headline_lead')",
+                        name="ck_sent_text_variant"),
+    )
 
 
 class ImportBatch(Base):

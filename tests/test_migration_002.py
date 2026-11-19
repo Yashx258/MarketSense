@@ -112,8 +112,10 @@ def test_fresh_init_matches_upgrade_with_existing_data(eng, monkeypatch):
         assert q(eng, "SELECT relevance_status, relevance_version FROM news_articles ORDER BY news_id") == [
             ("reject", "psx-rules-v1"), ("reject", "psx-rules-v1"),
         ]
-        for table, rows in before.items():
-            assert q(eng, f"SELECT * FROM {table} ORDER BY 1") == rows
+        for table in ("stocks", "news_article_stocks"):
+            assert q(eng, f"SELECT * FROM {table} ORDER BY 1") == before[table]
+        actual = q(eng, "SELECT * FROM sentiment_features ORDER BY sentiment_id")
+        assert actual == [(*row, "legacy_full_text") for row in before["sentiment_features"]]
         assert q(eng, "SELECT headline, time_precision, published_date::text FROM news_articles ORDER BY news_id") == [
             ("legacy dated", "exact", "2026-02-06"),
             ("legacy undated", "none", None),
@@ -141,3 +143,22 @@ def test_migration_003_backfills_review_and_preserves_annotations(eng):
     assert q(eng, "SELECT relevance_status, relevance_version FROM news_articles ORDER BY news_id") == [
         ("include", "manual"), ("review", "unclassified"),
     ]
+
+
+def test_migration_004_preserves_legacy_and_allows_both_colab_variants(eng):
+    migration = (ROOT / "sql/migrations/004_finbert_variants.sql").read_text(encoding="utf-8")
+    insert = """
+        INSERT INTO sentiment_features(
+            news_id, positive_score, neutral_score, negative_score, sentiment_label, model_name, text_variant
+        ) VALUES (1, .7, .2, .1, 'positive', 'ProsusAI/finbert', %s)
+    """
+    with eng.begin() as conn:
+        conn.exec_driver_sql(migration)
+        for variant in ("headline", "headline_lead"):
+            conn.exec_driver_sql(insert, (variant,))
+        conn.exec_driver_sql(migration)
+    assert q(eng, "SELECT text_variant FROM sentiment_features WHERE news_id = 1 ORDER BY 1") == [
+        ("headline",), ("headline_lead",), ("legacy_full_text",),
+    ]
+    with pytest.raises(IntegrityError), eng.begin() as conn:
+        conn.exec_driver_sql(insert, ("headline",))

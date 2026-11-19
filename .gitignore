@@ -19,6 +19,7 @@ __pycache__/
 Thumbs.db
 
 data/
+data/finbert/*.parquet
 
 *.sql.bak
 backup_*.sql

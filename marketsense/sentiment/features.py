@@ -19,7 +19,7 @@ from sqlalchemy import and_, or_, select
 
 from marketsense.config import Settings
 from marketsense.db.models import NewsArticle, NewsArticleStock, SentimentFeature
-from marketsense.sentiment.processor import MODEL_NAME
+from marketsense.sentiment.processor import LEGACY_VARIANT, MODEL_NAME
 
 COLUMNS = ["news_id", "stock_id", "published_at", "retrieved_at",
            "positive_score", "neutral_score", "negative_score", "sentiment_label"]
@@ -160,6 +160,7 @@ def sentiment_available_by(
     cutoff,
     *,
     model_name=MODEL_NAME,
+    text_variant=LEGACY_VARIANT,
     lookback=None,
     strict_retrieval=False,
     stock_ids=None,
@@ -175,7 +176,7 @@ def sentiment_available_by(
             SentimentFeature.sentiment_label,
         )
         .join(SentimentFeature, SentimentFeature.news_id == NewsArticle.news_id)
-        .where(SentimentFeature.model_name == model_name)
+        .where(SentimentFeature.model_name == model_name, SentimentFeature.text_variant == text_variant)
         .order_by(NewsArticle.published_at.asc().nulls_last(), NewsArticle.news_id, NewsArticleStock.stock_id)
     )
     df = _availability_frame(session, stmt, COLUMNS)

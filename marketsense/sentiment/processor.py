@@ -1,8 +1,8 @@
 """FinBERT sentiment scoring + the batch job that fills `sentiment_features`.
 
 * `FinBertBackend` loads ProsusAI/finbert LAZILY (importing this module never imports torch/transformers).
-* `SentimentProcessor.process_pending()` scores articles that have no row for the model yet, in batches, and is
-  repeatable: unique (news_id, model_name) + NOT EXISTS selection + ON CONFLICT DO NOTHING mean re-runs and
+* `SentimentProcessor.process_pending()` scores articles that have no legacy full-text row for the model yet.
+  The unique article/model/variant key and ON CONFLICT DO NOTHING mean re-runs and
   concurrent runs never create duplicates. A failing batch falls back to one-by-one so a single bad text cannot
   block the rest; failures are reported and simply stay 'pending' for the next run.
 * Scores are a pure function of the text, so a score never "leaks" information; WHEN an article was available
@@ -24,6 +24,7 @@ from marketsense.sentiment.text_hygiene import clean_article_text
 log = logging.getLogger(__name__)
 
 MODEL_NAME = "ProsusAI/finbert"
+LEGACY_VARIANT = "legacy_full_text"
 LABELS = ("positive", "neutral", "negative")
 
 
@@ -132,7 +133,8 @@ class SentimentProcessor:
                 select(NewsArticle.news_id, NewsArticle.stock_id, NewsArticle.headline, NewsArticle.article_text)
                 .where(NewsArticle.news_id > last_id, NewsArticle.relevance_status == "include",
                        ~exists().where(and_(SentimentFeature.news_id == NewsArticle.news_id,
-                                            SentimentFeature.model_name == self.model_name)))
+                                            SentimentFeature.model_name == self.model_name,
+                                            SentimentFeature.text_variant == LEGACY_VARIANT)))
                 .order_by(NewsArticle.news_id).limit(n)).all()
             if not rows:
                 break
@@ -150,8 +152,9 @@ class SentimentProcessor:
                 res = session.execute(dialect_insert(session)(SentimentFeature).values([
                     dict(news_id=r.news_id, stock_id=r.stock_id,
                          positive_score=_p(sc.positive), neutral_score=_p(sc.neutral), negative_score=_p(sc.negative),
-                         sentiment_label=sc.label, model_name=self.model_name)
-                    for r, sc in scored]).on_conflict_do_nothing(index_elements=["news_id", "model_name"]))
+                         sentiment_label=sc.label, model_name=self.model_name, text_variant=LEGACY_VARIANT)
+                    for r, sc in scored]).on_conflict_do_nothing(
+                        index_elements=["news_id", "model_name", "text_variant"]))
                 rep.scored += max(res.rowcount or 0, 0)
             session.commit()
         return rep

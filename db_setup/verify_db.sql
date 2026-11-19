@@ -44,7 +44,7 @@ SELECT sentiment_label, count(*) FROM sentiment_features GROUP BY 1 ORDER BY 1;
 \echo '== S2 articles still pending for FinBERT (0 after a full scoring run)'
 SELECT count(*) AS pending FROM news_articles n
 WHERE NOT EXISTS (SELECT 1 FROM sentiment_features s WHERE s.news_id = n.news_id AND s.model_name = 'ProsusAI/finbert');
-\echo '== S3 duplicate (news_id, model) rows (expect 0 rows)'
-SELECT news_id, model_name, count(*) FROM sentiment_features GROUP BY 1,2 HAVING count(*) > 1;
+\echo '== S3 duplicate (news_id, model, text_variant) rows (expect 0 rows)'
+SELECT news_id, model_name, text_variant, count(*) FROM sentiment_features GROUP BY 1,2,3 HAVING count(*) > 1;
 \echo '== S4 scores that do not sum to 1 (expect 0 rows)'
 SELECT sentiment_id FROM sentiment_features WHERE abs(positive_score + neutral_score + negative_score - 1) > 0.0001;

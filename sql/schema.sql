@@ -107,7 +107,9 @@ CREATE TABLE IF NOT EXISTS sentiment_features (
     sentiment_label VARCHAR(10) NOT NULL CHECK (sentiment_label IN ('positive','neutral','negative')),
     model_name     VARCHAR(100) NOT NULL,
     processed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_sent_news_model UNIQUE (news_id, model_name)
+    text_variant   VARCHAR(20) NOT NULL DEFAULT 'legacy_full_text',
+    CONSTRAINT uq_sent_news_model_variant UNIQUE (news_id, model_name, text_variant),
+    CONSTRAINT ck_sent_text_variant CHECK (text_variant IN ('legacy_full_text', 'headline', 'headline_lead'))
 );
 CREATE INDEX IF NOT EXISTS ix_sent_stock_time ON sentiment_features (stock_id, processed_at DESC);
 
